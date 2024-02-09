@@ -33,10 +33,10 @@ defmodule Phoenix.LiveViewTest.Router do
     live "/elements", ElementsLive
     live "/inner_block", InnerLive
 
+    live "/render-with", RenderWithLive
     live "/same-child", SameChildLive
     live "/root", RootLive
     live "/opts", OptsLive
-    live "/time-zones", AppendLive
     live "/shuffle", ShuffleLive
     live "/components", WithComponentLive
     live "/multi-targets", WithMultipleTargets
@@ -45,6 +45,8 @@ defmodule Phoenix.LiveViewTest.Router do
     live "/log-disabled", WithLogDisabled
     live "/errors", ErrorsLive
     live "/live-reload", ReloadLive
+    live "/assign_async", AssignAsyncLive
+    live "/start_async", StartAsyncLive
 
     # controller test
     get "/controller/:type", Controller, :incoming
@@ -118,9 +120,14 @@ defmodule Phoenix.LiveViewTest.Router do
     live "/lifecycle/components", HooksLive.WithComponent
     live "/lifecycle/handle-params-not-defined", HooksLive.HandleParamsNotDefined
     live "/lifecycle/handle-info-not-defined", HooksLive.HandleInfoNotDefined
+    live "/lifecycle/on-mount-options", HooksLive.OnMountOptions
 
     # integration stream
     live "/stream", StreamLive
+    live "/stream/reset", StreamResetLive
+    live "/stream/reset-lc", StreamResetLCLive
+    live "/stream/limit", StreamLimitLive
+    live "/stream/nested", StreamNestedLive
 
     # healthy
     live "/healthy/:category", HealthyLive
@@ -137,6 +144,7 @@ defmodule Phoenix.LiveViewTest.Router do
     # live_session
     live_session :test do
       live "/thermo-live-session", ThermostatLive
+      live "/thermo-live-session/nested-thermo", ThermostatLive
       live "/clock-live-session", ClockLive
       live "/classlist", ClassListLive
     end

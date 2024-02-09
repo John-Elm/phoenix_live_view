@@ -334,7 +334,7 @@ defmodule Phoenix.LiveViewTest do
       end
 
     start_proxy(path, %{
-      html: Phoenix.ConnTest.html_response(conn, 200),
+      response: Phoenix.ConnTest.response(conn, 200),
       connect_params: conn.private[:live_view_connect_params] || %{},
       connect_info: conn.private[:live_view_connect_info] || prune_conn(conn) || %{},
       live_module: live_module,
@@ -380,7 +380,7 @@ defmodule Phoenix.LiveViewTest do
     opts =
       Map.merge(opts, %{
         caller: {self(), ref},
-        html: opts.html,
+        html: opts.response,
         connect_params: opts.connect_params,
         connect_info: opts.connect_info,
         live_module: opts.live_module,
@@ -455,9 +455,12 @@ defmodule Phoenix.LiveViewTest do
     quote do
       component = unquote(component)
 
+      # Emit this line for undefined component warnings
+      if(is_atom(component), do: component.__live__())
+
       Phoenix.LiveViewTest.__render_component__(
         unquote(endpoint),
-        if(is_atom(component), do: component.__live__(), else: component),
+        unquote(component),
         unquote(assigns),
         unquote(opts)
       )
@@ -465,11 +468,10 @@ defmodule Phoenix.LiveViewTest do
   end
 
   @doc false
-  def __render_component__(endpoint, %{module: component}, assigns, opts) do
+  def __render_component__(endpoint, component, assigns, opts) when is_atom(component) do
     socket = %Socket{endpoint: endpoint, router: opts[:router]}
 
-    assigns =
-      Map.new(assigns)
+    assigns = Map.new(assigns)
 
     # TODO: Make the ID required once we support only stateful module components as live_component
     mount_assigns = if assigns[:id], do: %{myself: %Phoenix.LiveComponent.CID{cid: -1}}, else: %{}
@@ -923,6 +925,55 @@ defmodule Phoenix.LiveViewTest do
   end
 
   @doc """
+  Awaits all current `assign_async` and `start_async` for a given LiveView or element.
+
+  It renders the LiveView or Element once complete and returns the result.
+  The default `timeout` is [ExUnit](https://hexdocs.pm/ex_unit/ExUnit.html#configure/1)'s
+  `assert_receive_timeout` (100 ms).
+
+  ## Examples
+
+      {:ok, lv, html} = live(conn, "/path")
+      assert html =~ "loading data..."
+      assert render_async(lv) =~ "data loaded!"
+  """
+  def render_async(
+        view_or_element,
+        timeout \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout)
+      ) do
+    pids =
+      case view_or_element do
+        %View{} = view -> call(view, {:async_pids, {proxy_topic(view), nil, nil}})
+        %Element{} = element -> call(element, {:async_pids, element})
+      end
+
+    timeout_ref = make_ref()
+    Process.send_after(self(), {timeout_ref, :timeout}, timeout)
+
+    pids
+    |> Enum.map(&Process.monitor(&1))
+    |> Enum.each(fn ref ->
+      receive do
+        {^timeout_ref, :timeout} ->
+          raise RuntimeError, "expected async processes to finish within #{timeout}ms"
+
+        {:DOWN, ^ref, :process, _pid, _reason} ->
+          :ok
+      end
+    end)
+
+    unless Process.cancel_timer(timeout_ref) do
+      receive do
+        {^timeout_ref, :timeout} -> :noop
+      after
+        0 -> :noop
+      end
+    end
+
+    render(view_or_element)
+  end
+
+  @doc """
   Simulates a `live_patch` to the given `path` and returns the rendered result.
   """
   def render_patch(%View{} = view, path) when is_binary(path) do
@@ -1075,7 +1126,7 @@ defmodule Phoenix.LiveViewTest do
   a single element.
 
       assert view
-            |> element("#term a:first-child", "Increment")
+            |> element("#term > :first-child", "Increment")
             |> render() =~ "Increment</a>"
 
   Attribute selectors are also supported, and may be used on special cases
@@ -1127,6 +1178,7 @@ defmodule Phoenix.LiveViewTest do
     * `:size` - the byte size of the content
     * `:type` - the MIME type of the file
     * `:relative_path` - for simulating webkitdirectory metadata
+    * `:meta` - optional metadata sent by the client
 
   ## Examples
 
@@ -1151,6 +1203,19 @@ defmodule Phoenix.LiveViewTest do
   @doc false
   def __file_input__(view, selector, name, entries, builder) do
     cid = find_cid!(view, selector)
+    for entry <- entries do
+      content = entry[:content]
+      size = entry[:size]
+      if content && size && byte_size(content) != size do
+        raise ArgumentError, """
+        entry content size must match provided size.
+
+        By default the content size is calculated using byte_size/1, so you
+        rarely need to provide the size option yourself unless you are testing
+        for misbehaving clients.
+        """
+      end
+    end
 
     case Phoenix.LiveView.Channel.fetch_upload_config(view.pid, name, cid) do
       {:ok, %{external: false}} ->
@@ -1230,11 +1295,16 @@ defmodule Phoenix.LiveViewTest do
     path
   end
 
-  def assert_patch(view, to) when is_binary(to), do: assert_patch(view, to, 100)
+  def assert_patch(view, to) when is_binary(to) do
+    assert_patch(view, to, Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+  end
 
   @doc """
   Asserts a live patch will happen to a given path within `timeout`
-  milliseconds. The default `timeout` is 100.
+  milliseconds.
+
+  The default `timeout` is [ExUnit](https://hexdocs.pm/ex_unit/ExUnit.html#configure/1)'s
+  `assert_receive_timeout` (100 ms).
 
   It always returns `:ok`.
 
@@ -1251,8 +1321,8 @@ defmodule Phoenix.LiveViewTest do
   """
   def assert_patch(view, to, timeout)
       when is_binary(to) and is_integer(timeout) do
-    assert_navigation(view, :patch, to, timeout)
-    :ok
+    {path, _flash} = assert_navigation(view, :patch, to, timeout)
+    path
   end
 
   @doc """
@@ -1301,7 +1371,9 @@ defmodule Phoenix.LiveViewTest do
 
   @doc """
   Asserts a redirect will happen to a given path within `timeout` milliseconds.
-  The default `timeout` is 100.
+
+  The default `timeout` is [ExUnit](https://hexdocs.pm/ex_unit/ExUnit.html#configure/1)'s
+  `assert_receive_timeout` (100 ms).
 
   It returns the flash messages from said redirect, if any.
   Note the flash will contain string keys.
@@ -1408,7 +1480,7 @@ defmodule Phoenix.LiveViewTest do
   ## Examples
 
       view
-      |> element("#term a:first-child", "Increment")
+      |> element("#term > :first-child", "Increment")
       |> open_browser()
 
       assert view
@@ -1501,7 +1573,8 @@ defmodule Phoenix.LiveViewTest do
           {"open", [path]}
 
         {:unix, _} ->
-          if System.find_executable("cmd.exe") do
+          if path =~ "\\" and System.find_executable("cmd.exe") != nil do
+            # Use cmd.exe for WSL with project dir under Windows path
             {"cmd.exe", ["/c", "start", path]}
           else
             {"xdg-open", [path]}
@@ -1658,7 +1731,7 @@ defmodule Phoenix.LiveViewTest do
 
     url =
       case Keyword.fetch!(opts, :to) do
-        "/" <> path -> URI.merge(root.uri, path)
+        "/" <> _ = path -> URI.merge(root.uri, path)
         url -> url
       end
 
@@ -1679,7 +1752,7 @@ defmodule Phoenix.LiveViewTest do
     static_token = token_func.(root.static_token)
 
     start_proxy(url, %{
-      html: html,
+      response: html,
       live_redirect: {root.id, root_token, static_token},
       connect_params: root.connect_params,
       connect_info: root.connect_info,
@@ -1814,21 +1887,53 @@ defmodule Phoenix.LiveViewTest do
 
   Before making assertions about the how the upload is consumed server-side,
   you will need to call `render_submit/1`.
+
+  In the case where an upload progress callback issues a navigate, patch, or
+  redirect, the following will be returned:
+
+    * if the navigate is a `live_patch`, the current view will be patched
+      {:error, {:redirect, %{to: url}}}
+    * if the navigate is a `live_redirect`, this function will return
+      `{:error, {:live_redirect, %{to: url}}}`, which can be followed
+      with `follow_redirect/2`
+    * if the navigate is a regular redirect, this function will return
+      `{:error, {:redirect, %{to: url}}}`, which can be followed
+      with `follow_redirect/2`
   """
   def render_upload(%Upload{} = upload, entry_name, percent \\ 100) do
-    if UploadClient.allow_acknowledged?(upload) do
-      render_chunk(upload, entry_name, percent)
-    else
-      case preflight_upload(upload) do
-        {:ok, %{ref: ref, config: config, entries: entries_resp}} ->
-          case UploadClient.allowed_ack(upload, ref, config, entries_resp) do
-            :ok -> render_chunk(upload, entry_name, percent)
-            {:error, reason} -> {:error, reason}
-          end
+    entry_ref =
+      Enum.find_value(upload.entries, fn
+        %{"name" => ^entry_name, "ref" => ref} -> ref
+        %{} -> nil
+      end)
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+    unless entry_name do
+      raise ArgumentError, "no such entry with name #{inspect(entry_name)}"
+    end
+
+    case UploadClient.fetch_allow_acknowledged(upload, entry_name) do
+      {:ok, _token} ->
+        render_chunk(upload, entry_name, percent)
+
+      {:error, :nopreflight} ->
+        case preflight_upload(upload) do
+          {:ok, %{ref: ref, config: config, entries: entries_resp, errors: errors}} ->
+            if entry_errors = errors[entry_ref] do
+              UploadClient.allowed_ack(upload, ref, config, entry_name, entries_resp, errors)
+              {:error, for(reason <- entry_errors, do: [entry_ref, reason])}
+            else
+              case UploadClient.allowed_ack(upload, ref, config, entry_name, entries_resp, errors) do
+                :ok -> render_chunk(upload, entry_name, percent)
+                {:error, reason} -> {:error, reason}
+              end
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1854,7 +1959,23 @@ defmodule Phoenix.LiveViewTest do
   end
 
   defp render_chunk(upload, entry_name, percent) do
-    {:ok, _} = UploadClient.chunk(upload, entry_name, percent, proxy_pid(upload.view))
-    render(upload.view)
+    %{proxy: {_ref, _topic, pid}} = upload.view
+    monitor_ref = Process.monitor(pid)
+
+    case UploadClient.chunk(upload, entry_name, percent, proxy_pid(upload.view)) do
+      {:ok, _} ->
+        receive do
+          {:DOWN, ^monitor_ref, :process, _pid, {:shutdown, {:live_redirect, opts}}} ->
+            {:error, {:live_redirect, opts}}
+
+          {:DOWN, ^monitor_ref, :process, _pid, {:shutdown, {:redirect, opts}}} ->
+            {:error, {:redirect, opts}}
+        after
+          0 -> render(upload.view)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 end

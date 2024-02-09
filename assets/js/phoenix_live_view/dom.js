@@ -22,6 +22,8 @@ import {
   THROTTLED
 } from "./constants"
 
+import JS from "./js"
+
 import {
   logError
 } from "./utils"
@@ -48,7 +50,13 @@ let DOM = {
 
   isUploadInput(el){ return el.type === "file" && el.getAttribute(PHX_UPLOAD_REF) !== null },
 
-  findUploadInputs(node){ return this.all(node, `input[type="file"][${PHX_UPLOAD_REF}]`) },
+  isAutoUpload(inputEl){ return inputEl.hasAttribute("data-phx-auto-upload") },
+
+  findUploadInputs(node){
+    const formId = node.id
+    const inputsOutsideForm = this.all(document, `input[type="file"][${PHX_UPLOAD_REF}][form="${formId}"]`)
+    return this.all(node, `input[type="file"][${PHX_UPLOAD_REF}]`).concat(inputsOutsideForm)
+  },
 
   findComponentNodeList(node, cid){
     return this.filterWithinSameLiveView(this.all(node, `[${PHX_COMPONENT}="${cid}"]`), node)
@@ -66,7 +74,16 @@ let DOM = {
   },
 
   isUnloadableFormSubmit(e){
-    return !e.defaultPrevented && !this.wantsNewTab(e)
+    // Ignore form submissions intended to close a native <dialog> element
+    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/dialog#usage_notes
+    let isDialogSubmit = (e.target && e.target.getAttribute("method") === "dialog") ||
+      (e.submitter && e.submitter.getAttribute("formmethod") === "dialog")
+
+    if(isDialogSubmit){
+      return false
+    } else {
+      return !e.defaultPrevented && !this.wantsNewTab(e)
+    }
   },
 
   isNewPageClick(e, currentLocation){
@@ -75,6 +92,7 @@ let DOM = {
 
     if(e.defaultPrevented || href === null || this.wantsNewTab(e)){ return false }
     if(href.startsWith("mailto:") || href.startsWith("tel:")){ return false }
+    if(e.target.isContentEditable){ return false }
 
     try {
       url = new URL(href)
@@ -203,7 +221,23 @@ let DOM = {
 
       default:
         let timeout = parseInt(value)
-        let trigger = () => throttle ? this.deletePrivate(el, THROTTLED) : callback()
+        let trigger = (blur) => {
+          if(blur){
+            // if the input is blurred, we need to cancel the next throttle timeout
+            // therefore we store the timer id in the THROTTLED private attribute
+            if(throttle && this.private(el, THROTTLED)){
+              clearTimeout(this.private(el, THROTTLED))
+              this.deletePrivate(el, THROTTLED)
+            }
+            // on debounce we just trigger the callback
+            return callback()
+          }
+          // no blur, remove the throttle attribute if we are in throttle mode
+          if(throttle) this.deletePrivate(el, THROTTLED)
+          // always call the callback to ensure that the latest event is processed,
+          // even when throttle is active
+          callback()
+        }
         let currentCycle = this.incCycle(el, DEBOUNCE_TRIGGER, trigger)
         if(isNaN(timeout)){ return logError(`invalid throttle/debounce value: ${value}`) }
         if(throttle){
@@ -218,10 +252,14 @@ let DOM = {
             return false
           } else {
             callback()
-            this.putPrivate(el, THROTTLED, true)
-            setTimeout(() => {
+            // store the throttle timer id in the THROTTLED private attribute,
+            // so that we can cancel it if the input is blurred
+            // otherwise, when new events happen after blur, but before the old
+            // timeout is triggered, we would actually trigger the callback multiple times
+            const t = setTimeout(() => {
               if(asyncFilter()){ this.triggerCycle(el, DEBOUNCE_TRIGGER) }
             }, timeout)
+            this.putPrivate(el, THROTTLED, t)
           }
         } else {
           setTimeout(() => {
@@ -240,17 +278,17 @@ let DOM = {
           })
         }
         if(this.once(el, "bind-debounce")){
-          el.addEventListener("blur", () => this.triggerCycle(el, DEBOUNCE_TRIGGER))
+          el.addEventListener("blur", () => this.triggerCycle(el, DEBOUNCE_TRIGGER, null, [true]))
         }
     }
   },
 
-  triggerCycle(el, key, currentCycle){
+  triggerCycle(el, key, currentCycle, params=[]){
     let [cycle, trigger] = this.private(el, key)
     if(!currentCycle){ currentCycle = cycle }
     if(currentCycle === cycle){
       this.incCycle(el, key)
-      trigger()
+      trigger(...params)
     }
   },
 
@@ -273,33 +311,79 @@ let DOM = {
     }
   },
 
-  maybeHideFeedback(container, input, phxFeedbackFor){
-    if(!(this.private(input, PHX_HAS_FOCUSED) || this.private(input, PHX_HAS_SUBMITTED))){
-      let feedbacks = [input.name]
-      if(input.name.endsWith("[]")){ feedbacks.push(input.name.slice(0, -2)) }
-      let selector = feedbacks.map(f => `[${phxFeedbackFor}="${f}"]`).join(", ")
-      DOM.all(container, selector, el => el.classList.add(PHX_NO_FEEDBACK_CLASS))
-    }
+  isFeedbackContainer(el, phxFeedbackFor){
+    return el.hasAttribute && el.hasAttribute(phxFeedbackFor)
   },
 
-  resetForm(form, phxFeedbackFor){
-    Array.from(form.elements).forEach(input => {
-      let query = `[${phxFeedbackFor}="${input.id}"],
-                   [${phxFeedbackFor}="${input.name}"],
-                   [${phxFeedbackFor}="${input.name.replace(/\[\]$/, "")}"]`
+  maybeHideFeedback(container, feedbackContainers, phxFeedbackFor, phxFeedbackGroup){
+    // because we can have multiple containers with the same phxFeedbackFor value
+    // we perform the check only once and store the result;
+    // we often have multiple containers, because we push both fromEl and toEl in dompatch
+    // when a container is updated
+    const feedbackResults = {}
+    feedbackContainers.forEach(el => {
+      // skip elements that are not in the DOM
+      if(!container.contains(el)) return
+      const feedback = el.getAttribute(phxFeedbackFor)
+      if(!feedback){
+        // the container previously had phx-feedback-for, but now it doesn't
+        // remove the class from the container (if it exists)
+        JS.addOrRemoveClasses(el, [], [PHX_NO_FEEDBACK_CLASS])
+        return
+      }
+      if(feedbackResults[feedback] === true){
+        this.hideFeedback(el)
+        return
+      }
+      feedbackResults[feedback] = this.shouldHideFeedback(container, feedback, phxFeedbackGroup)
+      if(feedbackResults[feedback] === true){
+        this.hideFeedback(el)
+      }
+    })
+  },
 
+  hideFeedback(container){
+    JS.addOrRemoveClasses(container, [PHX_NO_FEEDBACK_CLASS], [])
+  },
+
+  shouldHideFeedback(container, nameOrGroup, phxFeedbackGroup){
+    const query = `[name="${nameOrGroup}"],
+                   [name="${nameOrGroup}[]"],
+                   [${phxFeedbackGroup}="${nameOrGroup}"]`
+    let focused = false
+    DOM.all(container, query, (input) => {
+      if(this.private(input, PHX_HAS_FOCUSED) || this.private(input, PHX_HAS_SUBMITTED)){
+        focused = true
+      }
+    })
+    return !focused
+  },
+
+  feedbackSelector(input, phxFeedbackFor, phxFeedbackGroup){
+    let query = `[${phxFeedbackFor}="${input.name}"],
+                 [${phxFeedbackFor}="${input.name.replace(/\[\]$/, "")}"]`
+    if(input.getAttribute(phxFeedbackGroup)){
+      query += `,[${phxFeedbackFor}="${input.getAttribute(phxFeedbackGroup)}"]`
+    }
+    return query
+  },
+
+  resetForm(form, phxFeedbackFor, phxFeedbackGroup){
+    Array.from(form.elements).forEach(input => {
+      let query = this.feedbackSelector(input, phxFeedbackFor, phxFeedbackGroup)
       this.deletePrivate(input, PHX_HAS_FOCUSED)
       this.deletePrivate(input, PHX_HAS_SUBMITTED)
       this.all(document, query, feedbackEl => {
-        feedbackEl.classList.add(PHX_NO_FEEDBACK_CLASS)
+        JS.addOrRemoveClasses(feedbackEl, [PHX_NO_FEEDBACK_CLASS], [])
       })
     })
   },
 
-  showError(inputEl, phxFeedbackFor){
-    if(inputEl.id || inputEl.name){
-      this.all(inputEl.form, `[${phxFeedbackFor}="${inputEl.id}"], [${phxFeedbackFor}="${inputEl.name}"]`, (el) => {
-        this.removeClass(el, PHX_NO_FEEDBACK_CLASS)
+  showError(inputEl, phxFeedbackFor, phxFeedbackGroup){
+    if(inputEl.name){
+      let query = this.feedbackSelector(inputEl, phxFeedbackFor, phxFeedbackGroup)
+      this.all(document, query, (el) => {
+        JS.addOrRemoveClasses(el, [], [PHX_NO_FEEDBACK_CLASS])
       })
     }
   },
@@ -312,12 +396,21 @@ let DOM = {
     return node.getAttribute && node.getAttribute(PHX_STICKY) !== null
   },
 
+  isChildOfAny(el, parents){
+    return !!parents.find(parent => parent.contains(el))
+  },
+
   firstPhxChild(el){
     return this.isPhxChild(el) ? el : this.all(el, `[${PHX_PARENT_ID}]`)[0]
   },
 
   dispatchEvent(target, name, opts = {}){
-    let bubbles = opts.bubbles === undefined ? true : !!opts.bubbles
+    let defaultBubble = true
+    let isUploadTarget = target.nodeName === "INPUT" && target.type === "file"
+    if(isUploadTarget && name === "click"){
+      defaultBubble = false
+    }
+    let bubbles = opts.bubbles === undefined ? defaultBubble : !!opts.bubbles
     let eventOpts = {bubbles: bubbles, cancelable: true, detail: opts.detail || {}}
     let event = name === "click" ? new MouseEvent("click", eventOpts) : new CustomEvent(name, eventOpts)
     target.dispatchEvent(event)
@@ -333,20 +426,40 @@ let DOM = {
     }
   },
 
+  // merge attributes from source to target
+  // if an element is ignored, we only merge data attributes
+  // including removing data attributes that are no longer in the source
   mergeAttrs(target, source, opts = {}){
-    let exclude = opts.exclude || []
+    let exclude = new Set(opts.exclude || [])
     let isIgnored = opts.isIgnored
     let sourceAttrs = source.attributes
     for(let i = sourceAttrs.length - 1; i >= 0; i--){
       let name = sourceAttrs[i].name
-      if(exclude.indexOf(name) < 0){ target.setAttribute(name, source.getAttribute(name)) }
+      if(!exclude.has(name)){
+        const sourceValue = source.getAttribute(name)
+        if(target.getAttribute(name) !== sourceValue && (!isIgnored || (isIgnored && name.startsWith("data-")))){
+          target.setAttribute(name, sourceValue)
+        }
+      } else {
+        // We exclude the value from being merged on focused inputs, because the
+        // user's input should always win.
+        // We can still assign it as long as the value property is the same, though.
+        // This prevents a situation where the updated hook is not being triggered
+        // when an input is back in its "original state", because the attribute
+        // was never changed, see:
+        // https://github.com/phoenixframework/phoenix_live_view/issues/2163
+        if(name === "value" && target.value === source.value){
+          // actually set the value attribute to sync it with the value property
+          target.setAttribute("value", source.getAttribute(name))
+        }
+      }
     }
 
     let targetAttrs = target.attributes
     for(let i = targetAttrs.length - 1; i >= 0; i--){
       let name = targetAttrs[i].name
       if(isIgnored){
-        if(name.startsWith("data-") && !source.hasAttribute(name)){ target.removeAttribute(name) }
+        if(name.startsWith("data-") && !source.hasAttribute(name) && ![PHX_REF, PHX_REF_SRC].includes(name)){ target.removeAttribute(name) }
       } else {
         if(!source.hasAttribute(name)){ target.removeAttribute(name) }
       }
@@ -356,6 +469,7 @@ let DOM = {
   mergeFocusedInput(target, source){
     // skip selects because FF will reset highlighted index for any setAttribute
     if(!(target instanceof HTMLSelectElement)){ DOM.mergeAttrs(target, source, {exclude: ["value"]}) }
+
     if(source.readOnly){
       target.setAttribute("readonly", true)
     } else {
@@ -368,7 +482,9 @@ let DOM = {
   },
 
   restoreFocus(focused, selectionStart, selectionEnd){
+    if(focused instanceof HTMLSelectElement){ focused.focus() }
     if(!DOM.isTextualInput(focused)){ return }
+
     let wasFocused = focused.matches(":focus")
     if(focused.readOnly){ focused.blur() }
     if(!wasFocused){ focused.focus() }

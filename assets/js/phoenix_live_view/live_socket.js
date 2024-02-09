@@ -96,6 +96,7 @@ import {
   PHX_TRACK_UPLOADS,
   PHX_SESSION,
   PHX_FEEDBACK_FOR,
+  PHX_FEEDBACK_GROUP,
   RELOAD_JITTER_MIN,
   RELOAD_JITTER_MAX,
   PHX_REF,
@@ -106,7 +107,6 @@ import {
   closestPhxBinding,
   closure,
   debug,
-  isObject,
   maybe
 } from "./utils"
 
@@ -400,23 +400,28 @@ export default class LiveSocket {
 
     this.main = this.newRootView(newMainEl, flash, liveReferer)
     this.main.setRedirect(href)
-    this.transitionRemoves()
+    this.transitionRemoves(null, true)
     this.main.join((joinCount, onDone) => {
       if(joinCount === 1 && this.commitPendingLink(linkRef)){
         this.requestDOMUpdate(() => {
           DOM.findPhxSticky(document).forEach(el => newMainEl.appendChild(el))
           this.outgoingMainEl.replaceWith(newMainEl)
           this.outgoingMainEl = null
-          callback && requestAnimationFrame(() => callback(linkRef))
+          callback && callback(linkRef)
           onDone()
         })
       }
     })
   }
 
-  transitionRemoves(elements){
+  transitionRemoves(elements, skipSticky){
     let removeAttr = this.binding("remove")
     elements = elements || DOM.all(document, `[${removeAttr}]`)
+
+    if(skipSticky){
+      const stickies = DOM.findPhxSticky(document) || []
+      elements = elements.filter(el => !DOM.isChildOfAny(el, stickies))
+    }
     elements.forEach(el => {
       this.execJS(el, el.getAttribute(removeAttr), "remove")
     })
@@ -522,7 +527,7 @@ export default class LiveSocket {
     if(!dead){ this.bindNav() }
     this.bindClicks()
     if(!dead){ this.bindForms() }
-    this.bind({keyup: "keyup", keydown: "keydown"}, (e, type, view, targetEl, phxEvent, eventTarget) => {
+    this.bind({keyup: "keyup", keydown: "keydown"}, (e, type, view, targetEl, phxEvent, phxTarget) => {
       let matchKey = targetEl.getAttribute(this.binding(PHX_KEY))
       let pressedKey = e.key && e.key.toLowerCase() // chrome clicked autocompletes send a keydown without key
       if(matchKey && matchKey.toLowerCase() !== pressedKey){ return }
@@ -530,13 +535,13 @@ export default class LiveSocket {
       let data = {key: e.key, ...this.eventMeta(type, e, targetEl)}
       JS.exec(type, phxEvent, view, targetEl, ["push", {data}])
     })
-    this.bind({blur: "focusout", focus: "focusin"}, (e, type, view, targetEl, phxEvent, eventTarget) => {
-      if(!eventTarget){
+    this.bind({blur: "focusout", focus: "focusin"}, (e, type, view, targetEl, phxEvent, phxTarget) => {
+      if(!phxTarget){
         let data = {key: e.key, ...this.eventMeta(type, e, targetEl)}
         JS.exec(type, phxEvent, view, targetEl, ["push", {data}])
       }
     })
-    this.bind({blur: "blur", focus: "focus"}, (e, type, view, targetEl, targetCtx, phxEvent, phxTarget) => {
+    this.bind({blur: "blur", focus: "focus"}, (e, type, view, targetEl, phxEvent, phxTarget) => {
       // blur and focus are triggered on document and window. Discard one to avoid dups
       if(phxTarget === "window"){
         let data = this.eventMeta(type, e, targetEl)
@@ -619,7 +624,7 @@ export default class LiveSocket {
   }
 
   bindClicks(){
-    window.addEventListener("click", e => this.clickStartedAtTarget = e.target)
+    window.addEventListener("mousedown", e => this.clickStartedAtTarget = e.target)
     this.bindClick("click", "click", false)
     this.bindClick("mousedown", "capture-click", true)
   }
@@ -631,6 +636,9 @@ export default class LiveSocket {
       if(capture){
         target = e.target.matches(`[${click}]`) ? e.target : e.target.querySelector(`[${click}]`)
       } else {
+        // a synthetic click event (detail 0) will not have caused a mousedown event,
+        // therefore the clickStartedAtTarget is stale
+        if(e.detail === 0) this.clickStartedAtTarget = e.target
         let clickStartedAtTarget = this.clickStartedAtTarget || e.target
         target = closestPhxBinding(clickStartedAtTarget, click)
         this.dispatchClickAway(e, clickStartedAtTarget)
@@ -659,9 +667,9 @@ export default class LiveSocket {
     let phxClickAway = this.binding("click-away")
     DOM.all(document, `[${phxClickAway}]`, el => {
       if(!(el.isSameNode(clickStartedAt) || el.contains(clickStartedAt))){
-        this.withinOwners(e.target, view => {
+        this.withinOwners(el, view => {
           let phxEvent = el.getAttribute(phxClickAway)
-          if(JS.isVisible(el)){
+          if(JS.isVisible(el) && JS.isInViewport(el)){
             JS.exec("click", phxEvent, view, el, ["push", {data: this.eventMeta("click", e, e.target)}])
           }
         })
@@ -703,7 +711,9 @@ export default class LiveSocket {
       let type = target && target.getAttribute(PHX_LIVE_LINK)
       if(!type || !this.isConnected() || !this.main || DOM.wantsNewTab(e)){ return }
 
-      let href = target.href
+      // When wrapping an SVG element in an anchor tag, the href can be an SVGAnimatedString
+      let href = target.href instanceof SVGAnimatedString ? target.href.baseVal : target.href
+
       let linkState = target.getAttribute(PHX_LINK_STATE)
       e.preventDefault()
       e.stopImmediatePropagation() // do not bubble click to regular phx-click bindings
@@ -725,7 +735,7 @@ export default class LiveSocket {
     }, false)
   }
 
-  maybeScroll(scroll) {
+  maybeScroll(scroll){
     if(typeof(scroll) === "number"){
       requestAnimationFrame(() => {
         window.scrollTo(0, scroll)
@@ -748,7 +758,7 @@ export default class LiveSocket {
   }
 
   pushHistoryPatch(href, linkState, targetEl){
-    if(!this.isConnected()){ return Browser.redirect(href) }
+    if(!this.isConnected() || !this.main.isMain()){ return Browser.redirect(href) }
 
     this.withPageLoading({to: href, kind: "patch"}, done => {
       this.main.pushLinkPatch(href, targetEl, linkRef => {
@@ -767,8 +777,9 @@ export default class LiveSocket {
   }
 
   historyRedirect(href, linkState, flash){
+    if(!this.isConnected() || !this.main.isMain()){ return Browser.redirect(href, flash) }
+
     // convert to full href if only path prefix
-    if(!this.isConnected()){ return Browser.redirect(href, flash) }
     if(/^\/$|^\/[^\/]+.*$/.test(href)){
       let {protocol, host} = window.location
       href = `${protocol}//${host}${href}`
@@ -849,8 +860,10 @@ export default class LiveSocket {
         let currentIterations = iterations
         iterations++
         let {at: at, type: lastType} = DOM.private(input, "prev-iteration") || {}
-        // detect dup because some browsers dispatch both "input" and "change"
-        if(at === currentIterations - 1 && type !== lastType){ return }
+        // Browsers should always fire at least one "input" event before every "change"
+        // Ignore "change" events, unless there was no prior "input" event.
+        // This could happen if user code triggers a "change" event, or if the browser is non-conforming.
+        if(at === currentIterations - 1 && type === "change" && lastType === "input"){ return }
 
         DOM.putPrivate(input, "prev-iteration", {at: currentIterations, type: type})
 
@@ -867,12 +880,14 @@ export default class LiveSocket {
     }
     this.on("reset", (e) => {
       let form = e.target
-      DOM.resetForm(form, this.binding(PHX_FEEDBACK_FOR))
+      DOM.resetForm(form, this.binding(PHX_FEEDBACK_FOR), this.binding(PHX_FEEDBACK_GROUP))
       let input = Array.from(form.elements).find(el => el.type === "reset")
-      // wait until next tick to get updated input value
-      window.requestAnimationFrame(() => {
-        input.dispatchEvent(new Event("input", {bubbles: true, cancelable: false}))
-      })
+      if(input){
+        // wait until next tick to get updated input value
+        window.requestAnimationFrame(() => {
+          input.dispatchEvent(new Event("input", {bubbles: true, cancelable: false}))
+        })
+      }
     })
   }
 

@@ -84,7 +84,7 @@ defmodule Phoenix.LiveView.Comprehension do
 
   @doc false
   def __annotate__(comprehension, %Phoenix.LiveView.LiveStream{} = stream) do
-    inserts = for {id, at, _item, limit} <- stream.inserts, into: %{}, do: {id, [at, limit]}
+    inserts = for {id, at, _item, limit} <- stream.inserts, do: [id, at, limit]
     data = [stream.ref, inserts, stream.deletes]
 
     if stream.reset? do
@@ -390,6 +390,21 @@ defmodule Phoenix.LiveView.Engine do
       {block, static, dynamic, fingerprint} =
         analyze_static_and_dynamic(static, dynamic, vars, assigns, caller)
 
+      static =
+        case Keyword.fetch(opts, :body_annotation) do
+          {:ok, {before, aft}} ->
+            case static do
+              [] ->
+                ["#{before}#{aft}"]
+
+              [first | rest] ->
+                List.update_at([to_string(before) <> first | rest], -1, &(&1 <> to_string(aft)))
+            end
+
+          :error ->
+            static
+        end
+
       changed =
         quote generated: true do
           case unquote(@assigns_var) do
@@ -451,13 +466,13 @@ defmodule Phoenix.LiveView.Engine do
 
   defp to_live_struct({:for, _, [_ | _]} = expr, vars, _assigns, caller) do
     with {:for, meta, [gen | args]} <- expr,
+         {:<-, gen_meta, [gen_pattern, gen_collection]} <- gen,
          {filters, [[do: {:__block__, _, block}]]} <- Enum.split(args, -1),
          {dynamic, [{:safe, static}]} <- Enum.split(block, -1) do
       {block, static, dynamic, fingerprint} =
         analyze_static_and_dynamic(static, dynamic, taint_vars(vars), %{}, caller)
 
       gen_var = Macro.unique_var(:for, __MODULE__)
-      {:<-, gen_meta, [gen_pattern, gen_collection]} = gen
 
       gen_collection =
         quote do
@@ -954,11 +969,6 @@ defmodule Phoenix.LiveView.Engine do
     {expr, vars, taint_assigns(assigns)}
   end
 
-  # Our own vars are ignored. They appear from nested do/end in EEx templates.
-  defp analyze({_, _, __MODULE__} = expr, vars, assigns, _caller) do
-    {expr, vars, assigns}
-  end
-
   # Ignore underscore
   defp analyze({:_, _, context} = expr, vars, assigns, _caller) when is_atom(context) do
     {expr, vars, assigns}
@@ -971,20 +981,32 @@ defmodule Phoenix.LiveView.Engine do
   end
 
   # Vars always taint unless we are in restricted mode.
-  defp analyze({name, meta, context} = expr, {:restricted, map}, assigns, caller)
-       when is_atom(name) and is_atom(context) do
-    if Map.has_key?(map, {name, context}) do
-      maybe_warn_taint(name, meta, context, caller)
+  defp analyze({name, meta, nil} = expr, {:restricted, map}, assigns, caller)
+       when is_atom(name) do
+    if Map.has_key?(map, name) do
+      maybe_warn_taint(name, meta, caller)
       {expr, {:tainted, map}, assigns}
     else
       {expr, {:restricted, map}, assigns}
     end
   end
 
-  defp analyze({name, meta, context} = expr, {_, map}, assigns, caller)
+  defp analyze({name, meta, nil} = expr, {_, map}, assigns, caller) when is_atom(name) do
+    maybe_warn_taint(name, meta, caller)
+    {expr, {:tainted, Map.put(map, name, true)}, assigns}
+  end
+
+  # Quoted vars are ignored as they come from engine code.
+  defp analyze({name, _meta, context} = expr, vars, assigns, _caller)
        when is_atom(name) and is_atom(context) do
-    maybe_warn_taint(name, meta, context, caller)
-    {expr, {:tainted, Map.put(map, {name, context}, true)}, assigns}
+    {expr, vars, assigns}
+  end
+
+  # Ignore right side of |> if a variable
+  defp analyze({:|>, meta, [left, {_, _, context} = right]}, vars, assigns, caller)
+       when is_atom(context) do
+    {left, vars, assigns} = analyze(left, vars, assigns, caller)
+    {{:|>, meta, [left, right]}, vars, assigns}
   end
 
   # Ignore binary modifiers
@@ -1105,8 +1127,8 @@ defmodule Phoenix.LiveView.Engine do
 
   ## Callbacks
 
-  defp maybe_warn_taint(name, meta, context, caller) do
-    if caller && Macro.Env.has_var?(caller, {name, context}) do
+  defp maybe_warn_taint(name, meta, caller) do
+    if caller && Macro.Env.has_var?(caller, {name, nil}) do
       message = """
       you are accessing the variable \"#{name}\" inside a LiveView template.
 
@@ -1180,7 +1202,7 @@ defmodule Phoenix.LiveView.Engine do
 
   # Calls to attributes escape is always safe
   defp to_safe(
-         {{:., _, [{:__aliases__, _, [:Phoenix, :HTML]}, :attributes_escape]}, _, [_]} = safe,
+         {{:., _, [Phoenix.LiveView.TagEngine, :attributes_escape]}, _, [_]} = safe,
          line,
          _extra_clauses?
        ) do
@@ -1293,16 +1315,16 @@ defmodule Phoenix.LiveView.Engine do
   # variables defined in arguments, such as `if var = ... do`.
   # This does not follow Elixir semantics, but yields better
   # optimizations.
-  defp classify_taint(:case, [_, _]), do: :live
-  defp classify_taint(:if, [_, _]), do: :live
-  defp classify_taint(:unless, [_, _]), do: :live
-  defp classify_taint(:cond, [_]), do: :live
-  defp classify_taint(:try, [_]), do: :live
-  defp classify_taint(:receive, [_]), do: :live
+  defp classify_taint(:case, [_, opts]) when is_list(opts), do: :live
+  defp classify_taint(:if, [_, opts]) when is_list(opts), do: :live
+  defp classify_taint(:unless, [_, opts]) when is_list(opts), do: :live
+  defp classify_taint(:cond, [opts]) when is_list(opts), do: :live
+  defp classify_taint(:try, [opts]) when is_list(opts), do: :live
+  defp classify_taint(:receive, [opts]) when is_list(opts), do: :live
 
   # with/for are specially handled during analyze
-  defp classify_taint(:with, _), do: :live
-  defp classify_taint(:for, _), do: :live
+  defp classify_taint(:with, [_ | _]), do: :live
+  defp classify_taint(:for, [_ | _]), do: :live
 
   # Constructs from Phoenix and TagEngine
   defp classify_taint(:inner_block, [_, [do: _]]), do: :live

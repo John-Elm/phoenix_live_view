@@ -5,7 +5,8 @@ export const RELOAD_JITTER_MAX = 10000
 export const FAILSAFE_JITTER = 30000
 export const PHX_EVENT_CLASSES = [
   "phx-click-loading", "phx-change-loading", "phx-submit-loading",
-  "phx-keydown-loading", "phx-keyup-loading", "phx-blur-loading", "phx-focus-loading"
+  "phx-keydown-loading", "phx-keyup-loading", "phx-blur-loading", "phx-focus-loading",
+  "phx-hook-loading"
 ]
 export const PHX_COMPONENT = "data-phx-component"
 export const PHX_LIVE_LINK = "data-phx-link"
@@ -21,6 +22,7 @@ export const PHX_DROP_TARGET = "drop-target"
 export const PHX_ACTIVE_ENTRY_REFS = "data-phx-active-refs"
 export const PHX_LIVE_FILE_UPDATED = "phx:live-file:updated"
 export const PHX_SKIP = "data-phx-skip"
+export const PHX_MAGIC_ID = "data-phx-id"
 export const PHX_PRUNE = "data-phx-prune"
 export const PHX_PAGE_LOADING = "page-loading"
 export const PHX_CONNECTED_CLASS = "phx-connected"
@@ -36,6 +38,7 @@ export const PHX_VIEWPORT_TOP = "viewport-top"
 export const PHX_VIEWPORT_BOTTOM = "viewport-bottom"
 export const PHX_TRIGGER_ACTION = "trigger-action"
 export const PHX_FEEDBACK_FOR = "feedback-for"
+export const PHX_FEEDBACK_GROUP = "feedback-group"
 export const PHX_HAS_FOCUSED = "phx-has-focused"
 export const FOCUSABLE_INPUTS = ["text", "textarea", "number", "email", "password", "search", "tel", "url", "date", "time", "datetime-local", "color", "range"]
 export const CHECKABLE_INPUTS = ["checkbox", "radio"]
@@ -79,6 +82,7 @@ export const DEFAULTS = {
 // Rendered
 export const DYNAMICS = "d"
 export const STATIC = "s"
+export const ROOT = "r"
 export const COMPONENTS = "c"
 export const EVENTS = "e"
 export const REPLY = "r"

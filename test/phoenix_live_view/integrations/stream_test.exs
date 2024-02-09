@@ -104,6 +104,45 @@ defmodule Phoenix.LiveView.StreamTest do
     assert lv |> render() |> users_in_dom("admins") == [{"admins-2", "updated"}]
   end
 
+  test "should properly reset after a stream has been set after mount", %{conn: conn} do
+    {:ok, lv, _} = live(conn, "/stream")
+    assert lv |> element("#users div") |> has_element?()
+
+    lv |> render_hook("reset-users", %{})
+    refute lv |> element("#users div") |> has_element?()
+
+    lv |> render_hook("stream-users", %{})
+    assert lv |> element("#users div") |> has_element?()
+
+    lv |> render_hook("reset-users", %{})
+    refute lv |> element("#users div") |> has_element?()
+  end
+
+  test "should preserve the order of appended items", %{conn: conn} do
+    {:ok, lv, _} = live(conn, "/stream")
+    assert lv |> element("#users div:last-child") |> render =~ "callan"
+
+    lv |> render_hook("append-users", %{})
+    assert lv |> element("#users div:last-child") |> render =~ "last_user"
+  end
+
+  test "properly orders elements on reset", %{conn: conn} do
+    {:ok, lv, _} = live(conn, "/stream")
+
+    assert lv |> render() |> users_in_dom("users") == [
+             {"users-1", "chris"},
+             {"users-2", "callan"}
+           ]
+
+    lv |> render_hook("reset-users-reorder", %{})
+
+    assert lv |> render() |> users_in_dom("users") == [
+             {"users-3", "peter"},
+             {"users-1", "chris"},
+             {"users-4", "mona"}
+           ]
+  end
+
   test "stream reset on patch", %{conn: conn} do
     {:ok, lv, _html} = live(conn, "/healthy/fruits")
 
@@ -125,6 +164,81 @@ defmodule Phoenix.LiveView.StreamTest do
 
     refute has_element?(lv, "li", "Apples")
     refute has_element?(lv, "li", "Oranges")
+
+    lv
+    |> element("a", "Switch")
+    |> render_click()
+
+    assert_patched(lv, "/healthy/fruits")
+
+    assert has_element?(lv, "h1", "Fruits")
+
+    refute has_element?(lv, "li", "Carrots")
+    refute has_element?(lv, "li", "Tomatoes")
+
+    assert has_element?(lv, "li", "Apples")
+    assert has_element?(lv, "li", "Oranges")
+  end
+
+  describe "within nested lv" do
+    test "does not clear stream when parent updates", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/stream/nested")
+      lv = find_live_child(lv, "nested")
+
+      # let the parent update
+      Process.sleep(100)
+
+      assert ids_in_ul_list(render(lv)) == ["items-a", "items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Filter") |> render_click()
+      assert ids_in_ul_list(html) == ["items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Reset") |> render_click()
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+    end
+  end
+
+  describe "issue #2994" do
+    test "can filter and reset a stream", %{conn: conn} do
+      {:ok, lv, html} = live(conn, "/stream/reset")
+
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Filter") |> render_click()
+      assert ids_in_ul_list(html) == ["items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Reset") |> render_click()
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+    end
+
+    test "can reorder stream", %{conn: conn} do
+      {:ok, lv, html} = live(conn, "/stream/reset")
+
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Reorder") |> render_click()
+      assert ids_in_ul_list(html) == ["items-b", "items-a", "items-c", "items-d"]
+    end
+
+    test "can filter and then prepend / append stream", %{conn: conn} do
+      {:ok, lv, html} = live(conn, "/stream/reset")
+
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Filter") |> render_click()
+      assert ids_in_ul_list(html) == ["items-b", "items-c", "items-d"]
+
+      html = assert lv |> element(~s(button[phx-click="prepend"]), "Prepend") |> render_click()
+      assert [<<"items-a-", _::binary>>, "items-b", "items-c", "items-d"] = ids_in_ul_list(html)
+
+      html = assert lv |> element("button", "Reset") |> render_click()
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+      html = assert lv |> element(~s(button[phx-click="append"]), "Append") |> render_click()
+
+      assert ["items-a", "items-b", "items-c", "items-d", <<"items-a-", _::binary>>] =
+               ids_in_ul_list(html)
+    end
   end
 
   describe "within live component" do
@@ -212,16 +326,271 @@ defmodule Phoenix.LiveView.StreamTest do
       assert streams.c_users.deletes == []
       assert_pruned_stream(lv)
     end
+
+    test "issue #2982 - can reorder a stream with LiveComponents as direct stream children", %{
+      conn: conn
+    } do
+      {:ok, lv, html} = live(conn, "/stream/reset-lc")
+
+      assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+      html = assert lv |> element("button", "Reorder") |> render_click()
+      assert ids_in_ul_list(html) == ["items-e", "items-a", "items-f", "items-g"]
+    end
+  end
+
+  test "issue #3023 - can bulk insert at index != -1", %{conn: conn} do
+    {:ok, lv, html} = live(conn, "/stream/reset")
+
+    assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+    html = assert lv |> element("button", "Bulk insert") |> render_click()
+
+    assert ids_in_ul_list(html) == [
+             "items-a",
+             "items-e",
+             "items-f",
+             "items-g",
+             "items-b",
+             "items-c",
+             "items-d"
+           ]
+  end
+
+  test "any stream insert for elements already in the DOM does not reorder", %{conn: conn} do
+    {:ok, lv, html} = live(conn, "/stream/reset")
+
+    assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+    html = assert lv |> element("button", "Prepend C") |> render_click()
+    assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+    html = assert lv |> element("button", "Append C") |> render_click()
+    assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+    html = assert lv |> element("button", "Insert C at 1") |> render_click()
+    assert ids_in_ul_list(html) == ["items-a", "items-b", "items-c", "items-d"]
+
+    html = assert lv |> element("button", "Insert at 1") |> render_click()
+    assert ["items-a", _, "items-b", "items-c", "items-d"] = ids_in_ul_list(html)
+
+    html = assert lv |> element("button", "Reset") |> render_click()
+    assert ["items-a", "items-b", "items-c", "items-d"] = ids_in_ul_list(html)
+
+    html = assert lv |> element("button", "Delete C and insert at 1") |> render_click()
+    assert ["items-a", "items-c", "items-b", "items-d"] = ids_in_ul_list(html)
   end
 
   test "stream raises when attempting to consume ahead of for", %{conn: conn} do
     {:ok, lv, _html} = live(conn, "/stream")
 
     assert Phoenix.LiveViewTest.HooksLive.exits_with(lv, ArgumentError, fn ->
-      render_click(lv, "consume-stream-invalid", %{})
-    end) =~ ~r/streams can only be consumed directly by a for comprehension/
+             render_click(lv, "consume-stream-invalid", %{})
+           end) =~ ~r/streams can only be consumed directly by a for comprehension/
   end
 
+  test "stream raises when there are items with invalid IDs", %{conn: conn} do
+    {:ok, lv, _html} = live(conn, "/stream")
+
+    assert Phoenix.LiveViewTest.HooksLive.exits_with(lv, ArgumentError, fn ->
+             render_click(lv, "stream-invalid-ids", %{}) |> IO.inspect()
+           end) =~
+             ~r/a container with phx-update=\"stream\" must only contain stream children with the id set to the `dom_id` of the stream item/
+  end
+
+  test "stream raises when non stream items are in container", %{conn: conn} do
+    {:ok, lv, _html} = live(conn, "/stream")
+
+    assert Phoenix.LiveViewTest.HooksLive.exits_with(lv, ArgumentError, fn ->
+             render_click(lv, "stream-invalid-item", %{}) |> IO.inspect()
+           end) =~
+             ~r/a container with phx-update=\"stream\" must only contain stream children with the id set to the `dom_id` of the stream item/
+  end
+
+  describe "limit" do
+    test "limit is enforced on mount, but not dead render", %{conn: conn} do
+      conn = get(conn, "/stream/limit")
+
+      assert html_response(conn, 200) |> ids_in_ul_list() == [
+               "items-1",
+               "items-2",
+               "items-3",
+               "items-4",
+               "items-5",
+               "items-6",
+               "items-7",
+               "items-8",
+               "items-9",
+               "items-10"
+             ]
+
+      {:ok, _lv, html} = live(conn)
+
+      assert ids_in_ul_list(html) == [
+               "items-6",
+               "items-7",
+               "items-8",
+               "items-9",
+               "items-10"
+             ]
+    end
+
+    test "removes item at front when appending and limit is negative", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/stream/limit")
+
+      assert lv |> render_hook("configure", %{"at" => "-1", "limit" => "-5"}) |> ids_in_ul_list() ==
+               [
+                 "items-6",
+                 "items-7",
+                 "items-8",
+                 "items-9",
+                 "items-10"
+               ]
+
+      assert lv |> render_hook("insert_1") |> ids_in_ul_list() == [
+               "items-7",
+               "items-8",
+               "items-9",
+               "items-10",
+               "items-11"
+             ]
+
+      assert lv |> render_hook("insert_10") |> ids_in_ul_list() == [
+               "items-17",
+               "items-18",
+               "items-19",
+               "items-20",
+               "items-21"
+             ]
+    end
+
+    test "removes item at back when prepending and limit is positive", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/stream/limit")
+
+      assert lv |> render_hook("configure", %{"at" => "0", "limit" => "5"}) |> ids_in_ul_list() ==
+               [
+                 "items-10",
+                 "items-9",
+                 "items-8",
+                 "items-7",
+                 "items-6"
+               ]
+
+      assert lv |> render_hook("insert_1") |> ids_in_ul_list() == [
+               "items-11",
+               "items-10",
+               "items-9",
+               "items-8",
+               "items-7"
+             ]
+
+      assert lv |> render_hook("insert_10") |> ids_in_ul_list() == [
+               "items-21",
+               "items-20",
+               "items-19",
+               "items-18",
+               "items-17"
+             ]
+    end
+
+    test "does nothing if appending and positive limit is reached", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/stream/limit")
+
+      assert lv |> render_hook("configure", %{"at" => "-1", "limit" => "5"}) |> ids_in_ul_list() ==
+               [
+                 "items-1",
+                 "items-2",
+                 "items-3",
+                 "items-4",
+                 "items-5"
+               ]
+
+      # adding new items should do nothing, as the limit is reached
+      assert lv |> render_hook("insert_1") |> ids_in_ul_list() == [
+               "items-1",
+               "items-2",
+               "items-3",
+               "items-4",
+               "items-5"
+             ]
+
+      assert lv |> render_hook("insert_10") |> ids_in_ul_list() == [
+               "items-1",
+               "items-2",
+               "items-3",
+               "items-4",
+               "items-5"
+             ]
+    end
+
+    test "does nothing if prepending and negative limit is reached", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/stream/limit")
+
+      assert lv |> render_hook("configure", %{"at" => "0", "limit" => "-5"}) |> ids_in_ul_list() ==
+               [
+                 "items-5",
+                 "items-4",
+                 "items-3",
+                 "items-2",
+                 "items-1"
+               ]
+
+      # adding new items should do nothing, as the limit is reached
+      assert lv |> render_hook("insert_1") |> ids_in_ul_list() == [
+               "items-5",
+               "items-4",
+               "items-3",
+               "items-2",
+               "items-1"
+             ]
+
+      assert lv |> render_hook("insert_10") |> ids_in_ul_list() == [
+               "items-5",
+               "items-4",
+               "items-3",
+               "items-2",
+               "items-1"
+             ]
+    end
+
+    test "arbitrary index", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/stream/limit")
+
+      assert lv |> render_hook("configure", %{"at" => "1", "limit" => "5"}) |> ids_in_ul_list() ==
+               [
+                 "items-1",
+                 "items-10",
+                 "items-9",
+                 "items-8",
+                 "items-7"
+               ]
+
+      assert lv |> render_hook("insert_10") |> ids_in_ul_list() == [
+               "items-1",
+               "items-20",
+               "items-19",
+               "items-18",
+               "items-17"
+             ]
+
+      assert lv |> render_hook("configure", %{"at" => "1", "limit" => "-5"}) |> ids_in_ul_list() ==
+               [
+                 "items-10",
+                 "items-5",
+                 "items-4",
+                 "items-3",
+                 "items-2"
+               ]
+
+      assert lv |> render_hook("insert_10") |> ids_in_ul_list() == [
+               "items-20",
+               "items-5",
+               "items-4",
+               "items-3",
+               "items-2"
+             ]
+    end
+  end
 
   defp assert_pruned_stream(lv) do
     stream = StreamLive.run(lv, fn socket -> {:reply, socket.assigns.streams.users, socket} end)
@@ -236,5 +605,12 @@ defmodule Phoenix.LiveView.StreamTest do
     |> Enum.map(fn {_tag, _attrs, [text | _children]} = child ->
       {DOM.attribute(child, "id"), String.trim(text)}
     end)
+  end
+
+  defp ids_in_ul_list(html) do
+    html
+    |> DOM.parse()
+    |> DOM.all("ul > li")
+    |> Enum.map(fn child -> DOM.attribute(child, "id") end)
   end
 end

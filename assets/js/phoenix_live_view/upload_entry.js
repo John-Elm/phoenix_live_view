@@ -10,19 +10,29 @@ import {
 } from "./utils"
 
 import LiveUploader from "./live_uploader"
+import DOM from "./dom"
 
 export default class UploadEntry {
   static isActive(fileEl, file){
     let isNew = file._phxRef === undefined
+    let isPreflightInProgress = UploadEntry.isPreflightInProgress(file)
     let activeRefs = fileEl.getAttribute(PHX_ACTIVE_ENTRY_REFS).split(",")
     let isActive = activeRefs.indexOf(LiveUploader.genFileRef(file)) >= 0
-    return file.size > 0 && (isNew || isActive)
+    return file.size > 0 && (isNew || isActive || !isPreflightInProgress)
   }
 
   static isPreflighted(fileEl, file){
     let preflightedRefs = fileEl.getAttribute(PHX_PREFLIGHTED_REFS).split(",")
     let isPreflighted = preflightedRefs.indexOf(LiveUploader.genFileRef(file)) >= 0
     return isPreflighted && this.isActive(fileEl, file)
+  }
+
+  static isPreflightInProgress(file){
+    return file._preflightInProgress === true
+  }
+
+  static markPreflightInProgress(file){
+    file._preflightInProgress = true
   }
 
   constructor(fileEl, file, view){
@@ -71,7 +81,7 @@ export default class UploadEntry {
   error(reason = "failed"){
     this.fileEl.removeEventListener(PHX_LIVE_FILE_UPDATED, this._onElUpdated)
     this.view.pushFileProgress(this.fileEl, this.ref, {error: reason})
-    LiveUploader.clearFiles(this.fileEl)
+    if(!DOM.isAutoUpload(this.fileEl)){ LiveUploader.clearFiles(this.fileEl) }
   }
 
   //private
@@ -95,7 +105,8 @@ export default class UploadEntry {
       relative_path: this.file.webkitRelativePath,
       size: this.file.size,
       type: this.file.type,
-      ref: this.ref
+      ref: this.ref,
+      meta: typeof(this.file.meta) === "function" ? this.file.meta() : undefined
     }
   }
 

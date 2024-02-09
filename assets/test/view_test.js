@@ -231,6 +231,13 @@ describe("View + DOM", function(){
     view = new View(liveViewDOM(html), liveSocket)
     view.joinCount = 2
     expect(view.formsForRecovery().length).toBe(0)
+
+    html = "<form id='my-form' phx-change='[[\"push\",{\"event\":\"update\",\"target\":1}]]'><input name=\"foo\" /></form>"
+    view = new View(liveViewDOM(html), liveSocket)
+    view.joinCount = 1
+    const newForms = view.formsForRecovery(html)
+    expect(newForms.length).toBe(1)
+    expect(newForms[0][0].getAttribute('phx-change')).toBe('[[\"push\",{\"event\":\"update\",\"target\":1}]]')
   })
 
   describe("submitForm", function(){
@@ -264,6 +271,15 @@ describe("View + DOM", function(){
       submitWithButton(btn, "increment=1&note=2&btnName=btnValue")
     })
 
+    test("payload includes submitter when name is provided (submitter outside form)", function(){
+      let btn = document.createElement("button")
+      btn.setAttribute("form", "my-form")
+      btn.setAttribute("type", "submit")
+      btn.setAttribute("name", "btnName")
+      btn.setAttribute("value", "btnValue")
+      submitWithButton(btn, "increment=1&note=2&btnName=btnValue", document.body)
+    })
+
     test("payload does not include submitter when name is not provided", function(){
       let btn = document.createElement("button")
       btn.setAttribute("type", "submit")
@@ -271,11 +287,15 @@ describe("View + DOM", function(){
       submitWithButton(btn, "increment=1&note=2")
     })
 
-    function submitWithButton(btn, queryString) {
+    function submitWithButton(btn, queryString, appendTo){
       let liveSocket = new LiveSocket("/live", Socket)
       let el = liveViewDOM()
       let form = el.querySelector("form")
-      form.appendChild(btn)
+      if(appendTo){
+        appendTo.appendChild(btn)
+      } else {
+        form.appendChild(btn)
+      }
 
       let view = simulateJoinedView(el, liveSocket)
       let channelStub = {
@@ -364,7 +384,7 @@ describe("View + DOM", function(){
       expect(view.el.innerHTML).toBe(html)
 
       let formEl = document.getElementById("form")
-      formEl.submit = () => done()
+      Object.getPrototypeOf(formEl).submit = done
       let updatedHtml = "<form id=\"form\" phx-submit=\"submit\" phx-trigger-action><input type=\"text\"></form>"
       view.update({s: [updatedHtml]}, [])
 
@@ -968,7 +988,7 @@ describe("View + Component", function(){
     view.pushEvent("keyup", input, targetCtx, "click", {})
   })
 
-  test("pushInput", function(){
+  test("pushInput", function(done){
     expect.assertions(6)
     let html =
       `<form id="form" phx-change="validate">
@@ -1024,17 +1044,108 @@ describe("View + Component", function(){
     // we have to set this manually since it's set by a change event that would require more plumbing with the liveSocket in the test to hook up
     DOM.putPrivate(first_name, "phx-has-focused", true)
     view.pushInput(first_name, el, null, "validate", {_target: first_name.name})
-    expect(el.querySelector(`[phx-feedback-for="${first_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
-    expect(el.querySelector(`[phx-feedback-for="${last_name.name}"`).classList.contains("phx-no-feedback")).toBeTruthy()
-
-    view.channel.nextValidate({"user[first_name]": null, "user[last_name]": null, "_target": "user[last_name]"})
-    DOM.putPrivate(last_name, "phx-has-focused", true)
-    view.pushInput(last_name, el, null, "validate", {_target: last_name.name})
-    expect(el.querySelector(`[phx-feedback-for="${first_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
-    expect(el.querySelector(`[phx-feedback-for="${last_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
+    window.requestAnimationFrame(() => {
+      expect(el.querySelector(`[phx-feedback-for="${first_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
+      expect(el.querySelector(`[phx-feedback-for="${last_name.name}"`).classList.contains("phx-no-feedback")).toBeTruthy()
+  
+      view.channel.nextValidate({"user[first_name]": null, "user[last_name]": null, "_target": "user[last_name]"})
+      DOM.putPrivate(last_name, "phx-has-focused", true)
+      view.pushInput(last_name, el, null, "validate", {_target: last_name.name})
+      window.requestAnimationFrame(() => {
+        expect(el.querySelector(`[phx-feedback-for="${first_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
+        expect(el.querySelector(`[phx-feedback-for="${last_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
+        done()
+      })
+    })
   })
 
-  test("pushInput sets phx-no-feedback class on feedback elements for multiple select", function(){
+  test("pushInput sets phx-no-feedback on feedback groups", function(done){
+    expect.assertions(9)
+    let html =
+      `<form id="form" phx-change="validate">
+      <div phx-feedback-for="mygroup"></div>
+      <label for="first_name">First Name</label>
+      <input id="first_name" value="" name="user[first_name]" />
+
+      <label for="last_name">Last Name</label>
+      <input id="last_name" value="" name="user[last_name]" />
+
+      <label for="email">Email</label>
+      <input id="email" value="" name="user[email]" />
+    </form>`
+    let liveSocket = new LiveSocket("/live", Socket)
+    let el = liveViewDOM(html)
+    let view = simulateJoinedView(el, liveSocket, html)
+    let channelStub = {
+      validate: "",
+      nextValidate(payload){
+        this.validate = Object.entries(payload)
+          .map(([key, value]) => `${encodeURIComponent(key)}=${value ? encodeURIComponent(value) : ""}`)
+          .join("&")
+      },
+      push(_evt, payload, _timeout){
+        expect(payload.value).toBe(this.validate)
+        return {
+          receive(status, cb){
+            if(status === "ok"){
+              let diff = {
+                s: [`
+                <form id="form" phx-change="validate">
+                  <div phx-feedback-for="mygroup"></div>
+
+                  <label for="first_name">First Name</label>
+                  <input id="first_name" value="" name="user[first_name]" phx-feedback-group="mygroup" />
+                  <span class="feedback" phx-feedback-for="user[first_name]">can't be blank</span>
+
+                  <label for="last_name">Last Name</label>
+                  <input id="last_name" value="" name="user[last_name]" phx-feedback-group="mygroup" />
+                  <span class="feedback" phx-feedback-for="user[last_name]">can't be blank</span>
+
+                  <label for="email">Email</label>
+                  <input id="email" value="" name="user[email]" />
+                  <span class="feedback" phx-feedback-for="user[email]">can't be blank</span>
+                </form>
+                `],
+                fingerprint: 345
+              }
+              cb({diff: diff})
+              return this
+            } else {
+              return this
+            }
+          }
+        }
+      }
+    }
+    view.channel = channelStub
+
+    let first_name = view.el.querySelector("#first_name")
+    let last_name = view.el.querySelector("#last_name")
+    let email = view.el.querySelector("#email")
+    view.channel.nextValidate({"user[first_name]": null, "user[last_name]": null, "user[email]": null, "_target": "user[email]"})
+    // we have to set this manually since it's set by a change event that would require more plumbing with the liveSocket in the test to hook up
+    DOM.putPrivate(email, "phx-has-focused", true)
+    view.pushInput(email, el, null, "validate", {_target: email.name})
+    window.requestAnimationFrame(() => {
+      expect(el.querySelector(`[phx-feedback-for="${email.name}"]`).classList.contains("phx-no-feedback")).toBeFalsy()
+      expect(el.querySelector(`[phx-feedback-for="${first_name.name}"]`).classList.contains("phx-no-feedback")).toBeTruthy()
+      expect(el.querySelector(`[phx-feedback-for="${last_name.name}"]`).classList.contains("phx-no-feedback")).toBeTruthy()
+      expect(el.querySelector("[phx-feedback-for=\"mygroup\"]").classList.contains("phx-no-feedback")).toBeTruthy()
+
+      view.channel.nextValidate({"user[first_name]": null, "user[last_name]": null, "user[email]": null, "_target": "user[first_name]"})
+      DOM.putPrivate(first_name, "phx-has-focused", true)
+      view.pushInput(first_name, el, null, "validate", {_target: first_name.name})
+      window.requestAnimationFrame(() => {
+        expect(el.querySelector(`[phx-feedback-for="${first_name.name}"`).classList.contains("phx-no-feedback")).toBeFalsy()
+        expect(el.querySelector(`[phx-feedback-for="${last_name.name}"`).classList.contains("phx-no-feedback")).toBeTruthy()
+        // first_name was focused, the feedback-group should not have the phx-no-feedback class
+        expect(el.querySelector("[phx-feedback-for=\"mygroup\"]").classList.contains("phx-no-feedback")).toBeFalsy()
+        done()
+      })
+    })
+  })
+
+  test("pushInput sets phx-no-feedback class on feedback elements for multiple select", function(done){
     // a multiple select name attribute contains trailing square brackets [] to capture multiple options
     let multiple_select_name = "user[allergies][]"
     // the phx-feedback-for attribute typically doesn't contain trailing brackets
@@ -1090,13 +1201,18 @@ describe("View + Component", function(){
     // we have to set this manually since it's set by a change event that would require more plumbing with the liveSocket in the test to hook up
     DOM.putPrivate(first_name_input, "phx-has-focused", true)
     view.pushInput(first_name_input, el, null, "validate", {_target: "user[first_name]"})
-    expect(el.querySelector(`span[phx-feedback-for="user[first_name]"`).classList.contains("phx-no-feedback")).toBeFalsy()
-    expect(el.querySelector(`span[phx-feedback-for="user[allergies]"`).classList.contains("phx-no-feedback")).toBeTruthy()
-
-    DOM.putPrivate(allergies_select, "phx-has-focused", true)
-    view.pushInput(allergies_select, el, null, "validate", {_target: "user[allergies][]"})
-    expect(el.querySelector(`span[phx-feedback-for="user[first_name]"`).classList.contains("phx-no-feedback")).toBeFalsy()
-    expect(el.querySelector(`span[phx-feedback-for="user[allergies]"`).classList.contains("phx-no-feedback")).toBeFalsy()
+    window.requestAnimationFrame(() => {
+      expect(el.querySelector(`span[phx-feedback-for="user[first_name]"`).classList.contains("phx-no-feedback")).toBeFalsy()
+      expect(el.querySelector(`span[phx-feedback-for="user[allergies]"`).classList.contains("phx-no-feedback")).toBeTruthy()
+  
+      DOM.putPrivate(allergies_select, "phx-has-focused", true)
+      view.pushInput(allergies_select, el, null, "validate", {_target: "user[allergies][]"})
+      window.requestAnimationFrame(() => {
+        expect(el.querySelector(`span[phx-feedback-for="user[first_name]"`).classList.contains("phx-no-feedback")).toBeFalsy()
+        expect(el.querySelector(`span[phx-feedback-for="user[allergies]"`).classList.contains("phx-no-feedback")).toBeFalsy()
+        done()
+      })
+    })
   })
 
   test("adds auto ID to prevent teardown/re-add", () => {
@@ -1109,22 +1225,22 @@ describe("View + Component", function(){
     let joinDiff = {
       "0": {"0": "", "1": 0, "s": ["", "", "<h2>2</h2>\n"]},
       "c": {
-        "0": {"s": ["<div phx-click=\"show-rect\">Menu</div>\n"]}
+        "0": {"s": ["<div phx-click=\"show-rect\">Menu</div>\n"], "r": 1}
       },
       "s": ["", ""]
     }
 
     let updateDiff = {
       "0": {
-        "0": {"s": ["  <h1>1</h1>\n"]}
+        "0": {"s": ["  <h1>1</h1>\n"], "r": 1}
       }
     }
 
     view.onJoin({rendered: joinDiff})
-    expect(view.el.innerHTML.trim()).toBe("<div phx-click=\"show-rect\" data-phx-component=\"0\" id=\"container-0-0\">Menu</div><h2>2</h2>")
+    expect(view.el.innerHTML.trim()).toBe("<div data-phx-id=\"container-c-0\" data-phx-component=\"0\" phx-click=\"show-rect\">Menu</div>\n<h2>2</h2>")
 
     view.update(updateDiff, [])
-    expect(view.el.innerHTML.trim().replace("\n", "")).toBe("<h1>1</h1><div phx-click=\"show-rect\" data-phx-component=\"0\" id=\"container-0-0\">Menu</div><h2>2</h2>")
+    expect(view.el.innerHTML.trim().replace("\n", "")).toBe("<h1 data-phx-id=\"container-1\">1</h1><div data-phx-id=\"container-c-0\" data-phx-component=\"0\" phx-click=\"show-rect\">Menu</div>\n<h2>2</h2>")
   })
 
   test("respects nested components", () => {
@@ -1137,50 +1253,14 @@ describe("View + Component", function(){
     let joinDiff = {
       "0": 0,
       "c": {
-        "0": {"0": 1, "s": ["<div>Hello</div>", ""]},
-        "1": {"s": ["<div>World</div>"]}
+        "0": {"0": 1, "s": ["<div>Hello</div>", ""], "r": 1},
+        "1": {"s": ["<div>World</div>"], "r": 1}
       },
       "s": ["", ""]
     }
 
     view.onJoin({rendered: joinDiff})
-    expect(view.el.innerHTML.trim()).toBe("<div data-phx-component=\"0\" id=\"container-0-0\">Hello</div><div data-phx-component=\"1\" id=\"container-1-0\">World</div>")
-  })
-
-  test("wraps non-empty text nodes in span tags", () => {
-    let liveSocket = new LiveSocket("/live", Socket)
-    let el = liveViewDOM()
-    let view = simulateJoinedView(el, liveSocket)
-
-    stubChannel(view)
-
-    let joinDiff = {
-      "0": 0,
-      "c": {"0": {"s": ["Hello<div>World</div>\n"]}},
-      "s": ["", ""]
-    }
-
-    jest.spyOn(console, "error").mockImplementation(() => { })
-    view.onJoin({rendered: joinDiff})
-    expect(view.el.innerHTML.trim()).toBe("<span data-phx-component=\"0\"></span><div data-phx-component=\"0\" id=\"container-0-1\">World</div>")
-  })
-
-  test("wraps empty component in a single span tag", () => {
-    let liveSocket = new LiveSocket("/live", Socket)
-    let el = liveViewDOM()
-    let view = simulateJoinedView(el, liveSocket)
-
-    stubChannel(view)
-
-    let joinDiff = {
-      "0": 0,
-      "c": {"0": {"s": ["\n"]}},
-      "s": ["", ""]
-    }
-
-    jest.spyOn(console, "error").mockImplementation(() => { })
-    view.onJoin({rendered: joinDiff})
-    expect(view.el.innerHTML.trim()).toBe("<span data-phx-component=\"0\"></span>")
+    expect(view.el.innerHTML.trim()).toBe("<div data-phx-id=\"container-c-0\" data-phx-component=\"0\">Hello</div><div data-phx-id=\"container-c-1\" data-phx-component=\"1\">World</div>")
   })
 
   test("destroys children when they are removed by an update", () => {

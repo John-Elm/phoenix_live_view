@@ -273,21 +273,22 @@ defmodule Phoenix.LiveViewTest.DOM do
 
   def render_diff(rendered) do
     rendered
-    |> Phoenix.LiveView.Diff.to_iodata(fn cid, contents ->
-      contents
-      |> IO.iodata_to_binary()
-      |> parse()
-      |> List.wrap()
-      |> Enum.map(walk_fun(&inject_cid_attr(&1, cid)))
-      |> to_html()
-    end)
+    |> Phoenix.LiveView.Diff.to_iodata(&add_cid_attr/2)
     |> IO.iodata_to_binary()
     |> parse()
     |> List.wrap()
   end
 
-  defp inject_cid_attr({tag, attrs, children}, cid) do
-    {tag, [{@phx_component, to_string(cid)}] ++ attrs, children}
+  defp add_cid_attr(cid, [head | tail]) do
+    head_with_cid =
+      Regex.replace(
+        ~r/^(\s*(?:<!--.*?-->\s*)*)<([^\s\/>]+)/,
+        IO.iodata_to_binary(head),
+        "\\0 #{@phx_component}=\"#{to_string(cid)}\"",
+        global: false
+      )
+
+    [head_with_cid | tail]
   end
 
   # Patching
@@ -362,35 +363,8 @@ defmodule Phoenix.LiveViewTest.DOM do
     end
   end
 
-  defp apply_phx_update(type, html_tree, {tag, attrs, appended_children} = node, streams)
-       when type in ["stream", "append", "prepend"] do
-    {stream_inserts, stream_deletes, stream_resets} =
-      Enum.reduce(streams, {%{}, MapSet.new(), MapSet.new()}, fn item, acc ->
-        [ref, inserts, deletes | maybe_reset] = item
-        {in_acc, deletes_acc, resets_acc} = acc
-        # rewrite inserts to nest ref
-        inserts = Enum.into(inserts, %{}, fn {id, [at, limit]} -> {id, {ref, at, limit}} end)
-        new_inserts = Map.merge(in_acc, inserts)
-        new_deletes = MapSet.union(deletes_acc, MapSet.new(deletes))
-
-        case maybe_reset do
-          [] -> {new_inserts, new_deletes, resets_acc}
-          [true] -> {new_inserts, new_deletes, MapSet.put(resets_acc, ref)}
-        end
-      end)
-
-    # remove stream reset children from tree
-    html_tree =
-      walk(html_tree, fn {tag, attrs, children} = node ->
-        stream_ref = attribute(node, "data-phx-stream")
-
-        if stream_ref in stream_resets do
-          nil
-        else
-          {tag, attrs, children}
-        end
-      end)
-
+  defp apply_phx_update(type, html_tree, {tag, attrs, appended_children} = node, _streams)
+       when type in ["append", "prepend"] do
     container_id = attribute(node, "id")
     verify_phx_update_id!(type, container_id, node)
     children_before = apply_phx_update_children(html_tree, container_id)
@@ -398,7 +372,7 @@ defmodule Phoenix.LiveViewTest.DOM do
     new_ids = apply_phx_update_children_id(type, appended_children)
 
     content_changed? =
-      new_ids != existing_ids or (Enum.any?(stream_inserts) or Enum.any?(stream_deletes))
+      new_ids != existing_ids
 
     dup_ids =
       if content_changed? && new_ids do
@@ -425,52 +399,6 @@ defmodule Phoenix.LiveViewTest.DOM do
       end)
 
     cond do
-      # reorder and/or remove stream children
-      content_changed? && type == "stream" ->
-        children = updated_existing_children ++ updated_appended
-
-        new_children =
-          Enum.reduce(stream_inserts, children, fn {id, {ref, insert_at, _limit}}, acc ->
-            old_index = Enum.find_index(acc, &(attribute(&1, "id") == id))
-            existing? = Enum.find_index(updated_existing_children, &(attribute(&1, "id") == id))
-            deleted? = MapSet.member?(stream_deletes, id)
-
-            child =
-              case old_index && Enum.at(acc, old_index) do
-                nil -> nil
-                child -> set_attr(child, "data-phx-stream", ref)
-              end
-
-            cond do
-              # skip added children that aren't ours
-              parent_id(html_tree, id) != container_id ->
-                acc
-
-              # do not append existing child if already present, only update in place
-              old_index && insert_at == -1 && existing? ->
-                if deleted? do
-                  acc |> List.delete_at(old_index) |> List.insert_at(insert_at, child)
-                else
-                  List.replace_at(acc, old_index, child)
-                end
-
-              old_index && insert_at ->
-                acc |> List.delete_at(old_index) |> List.insert_at(insert_at, child)
-
-              !old_index && insert_at ->
-                List.insert_at(acc, insert_at, child)
-            end
-          end)
-          |> Enum.reject(fn child ->
-            id = attribute(child, "id")
-            deleted? = MapSet.member?(stream_deletes, id)
-            {_ref, inserted_at, _limit} = Map.get(stream_inserts, id, {nil, false, nil})
-
-            deleted? && !inserted_at
-          end)
-
-        {tag, attrs, new_children}
-
       content_changed? && type == "append" ->
         {tag, attrs, updated_existing_children ++ updated_appended}
 
@@ -480,6 +408,34 @@ defmodule Phoenix.LiveViewTest.DOM do
       !content_changed? ->
         {tag, attrs, updated_appended}
     end
+  end
+
+  # return the children as is if there are no entries in the list of streams;
+  # this could be caused by an update in a parent live view
+  defp apply_phx_update("stream", _html_tree, {tag, attrs, appended_children} = _node, []) do
+    {tag, attrs, appended_children}
+  end
+
+  defp apply_phx_update("stream", html_tree, {tag, attrs, appended_children} = node, streams) do
+    container_id = attribute(node, "id")
+    verify_phx_update_id!("stream", container_id, node)
+    children_before = apply_phx_update_children(html_tree, container_id)
+
+    new_children =
+      Enum.reduce(streams, children_before, fn stream, acc ->
+        apply_stream(acc, appended_children, stream)
+      end)
+
+    # we can only verify the children after applying all the streams;
+    # this is because apply_phx_update is called with all streams of the LiveView,
+    # even of nested components that may have nothing to do with the current node
+    verify_only_stream_children!(
+      children_before,
+      appended_children,
+      Enum.flat_map(streams, fn [_, inserts, _ | _maybe_reset] -> inserts end)
+    )
+
+    {tag, attrs, new_children}
   end
 
   defp apply_phx_update("ignore", _state, node, _streams) do
@@ -497,6 +453,50 @@ defmodule Phoenix.LiveViewTest.DOM do
             "expected one of \"stream\", \"replace\", \"append\", \"prepend\", \"ignore\""
   end
 
+  defp apply_stream(existing_children, appended_children, [ref, inserts, deleteIds | maybe_reset]) do
+    reset = maybe_reset == [true]
+
+    children =
+      if reset do
+        Enum.reject(existing_children, fn node ->
+          attribute(node, "data-phx-stream") == ref
+        end)
+      else
+        existing_children
+      end
+
+    children =
+      Enum.filter(children, fn node ->
+        attribute(node, "id") not in deleteIds
+      end)
+
+    Enum.reduce(inserts, children, fn [id, stream_at, limit], acc ->
+      child = Enum.find(appended_children, fn node -> attribute(node, "id") == id end)
+      current_index = Enum.find_index(acc, fn node -> attribute(node, "id") == id end)
+
+      new_children =
+        cond do
+          is_nil(child) ->
+            acc
+
+          current_index ->
+            # update in place
+            List.replace_at(acc, current_index, set_attr(child, "data-phx-stream", ref))
+
+          true ->
+            List.insert_at(acc, stream_at, set_attr(child, "data-phx-stream", ref))
+        end
+
+      maybe_apply_stream_limit(new_children, limit)
+    end)
+  end
+
+  defp maybe_apply_stream_limit(children, nil), do: children
+
+  defp maybe_apply_stream_limit(children, limit) do
+    Enum.take(children, limit)
+  end
+
   defp verify_phx_update_id!(type, id, node) when id in ["", nil] do
     raise ArgumentError,
           "setting phx-update to #{inspect(type)} requires setting an ID on the container, " <>
@@ -505,6 +505,22 @@ defmodule Phoenix.LiveViewTest.DOM do
 
   defp verify_phx_update_id!(_type, _id, _node) do
     :ok
+  end
+
+  defp verify_only_stream_children!(existing_children, appended_children, inserts) do
+    existing_ids = MapSet.new(apply_phx_update_children_id("stream", existing_children))
+    appended_ids = MapSet.new(apply_phx_update_children_id("stream", appended_children))
+    new_appended_ids = MapSet.difference(appended_ids, existing_ids)
+    insert_ids = Enum.map(inserts, fn [id, _stream_at, _limit] -> id end) |> MapSet.new()
+
+    if MapSet.difference(new_appended_ids, insert_ids) |> MapSet.size() > 0 do
+      raise ArgumentError, """
+      a container with phx-update="stream" must only contain stream children with the \
+      id set to the `dom_id` of the stream item. Got:
+
+      #{to_html(appended_children)}
+      """
+    end
   end
 
   defp apply_phx_update_children(html_tree, id) do
@@ -569,4 +585,37 @@ defmodule Phoenix.LiveViewTest.DOM do
 
     {tag, new_attrs, children}
   end
+
+  defmacro sigil_X({:<<>>, _, [binary]}, []) when is_binary(binary) do
+    Macro.escape(parse_sorted!(binary))
+  end
+
+  defmacro sigil_x(term, []) do
+    quote do
+      unquote(__MODULE__).parse_sorted!(unquote(term))
+    end
+  end
+
+  def t2h(template) do
+    template
+    |> Phoenix.LiveViewTest.rendered_to_string()
+    |> parse_sorted!()
+  end
+
+  @doc """
+  Parses HTML into Floki format with sorted attributes.
+  """
+  def parse_sorted!(value) do
+    value
+    |> Floki.parse_fragment!()
+    |> Enum.map(&normalize_attribute_order/1)
+  end
+
+  defp normalize_attribute_order({node_type, attributes, content}),
+    do: {node_type, Enum.sort(attributes), Enum.map(content, &normalize_attribute_order/1)}
+
+  defp normalize_attribute_order(values) when is_list(values),
+    do: Enum.map(values, &normalize_attribute_order/1)
+
+  defp normalize_attribute_order(value), do: value
 end

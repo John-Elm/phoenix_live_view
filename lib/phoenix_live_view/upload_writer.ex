@@ -29,6 +29,8 @@ defmodule Phoenix.LiveView.UploadWriter do
       defmodule EchoWriter do
         @behaviour Phoenix.LiveView.UploadWriter
 
+        require Logger
+
         @impl true
         def init(opts) do
           {:ok, %{total: 0, level: Keyword.fetch!(opts, :level)}}
@@ -41,7 +43,7 @@ defmodule Phoenix.LiveView.UploadWriter do
         def write_chunk(data, state) do
           size = byte_size(data)
           Logger.log(state.level, "received chunk of #{size} bytes")
-          {:ok, %{state | state.total + size}}
+          {:ok, %{state | total: state.total + size}}
         end
 
         @impl true

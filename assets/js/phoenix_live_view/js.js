@@ -2,14 +2,13 @@ import DOM from "./dom"
 import ARIA from "./aria"
 
 let focusStack = null
+let default_transition_time = 200
 
 let JS = {
   exec(eventType, phxEvent, view, sourceEl, defaults){
     let [defaultKind, defaultArgs] = defaults || [null, {callback: defaults && defaults.callback}]
     let commands = phxEvent.charAt(0) === "[" ?
       JSON.parse(phxEvent) : [[defaultKind, defaultArgs]]
-
-
 
     commands.forEach(([kind, args]) => {
       if(kind === defaultKind && defaultArgs.data){
@@ -26,11 +25,25 @@ let JS = {
     return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length > 0)
   },
 
+  // returns true if any part of the element is inside the viewport
+  isInViewport(el){
+    const rect = el.getBoundingClientRect()
+    const windowHeight = window.innerHeight || document.documentElement.clientHeight
+    const windowWidth = window.innerWidth || document.documentElement.clientWidth
+
+    return (
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < windowWidth &&
+      rect.top < windowHeight
+    )
+  },
+
   // private
 
   // commands
 
-  exec_exec(eventType, phxEvent, view, sourceEl, el, [attr, to]){
+  exec_exec(eventType, phxEvent, view, sourceEl, el, {attr, to}){
     let nodes = to ? DOM.all(document, to) : [sourceEl]
     nodes.forEach(node => {
       let encodedJS = node.getAttribute(attr)
@@ -46,13 +59,12 @@ let JS = {
   },
 
   exec_push(eventType, phxEvent, view, sourceEl, el, args){
-    if(!view.isConnected()){ return }
-
     let {event, data, target, page_loading, loading, value, dispatcher, callback} = args
     let pushOpts = {loading, value, target, page_loading: !!page_loading}
     let targetSrc = eventType === "change" && dispatcher ? dispatcher : sourceEl
     let phxTarget = target || targetSrc.getAttribute(view.binding("target")) || targetSrc
     view.withinTargets(phxTarget, (targetView, targetCtx) => {
+      if(!targetView.isConnected()){ return }
       if(eventType === "change"){
         let {newCid, _target} = args
         _target = _target || (DOM.isFormInput(sourceEl) ? sourceEl.name : undefined)
@@ -102,6 +114,28 @@ let JS = {
     this.addOrRemoveClasses(el, [], names, transition, time, view)
   },
 
+  exec_toggle_class(eventType, phxEvent, view, sourceEl, el, {to, names, transition, time}){
+    this.toggleClasses(el, names, transition, view)
+  },
+
+  exec_toggle_attr(eventType, phxEvent, view, sourceEl, el, {attr: [attr, val1, val2]}){
+    if(el.hasAttribute(attr)){
+      if(val2 !== undefined){
+        // toggle between val1 and val2
+        if(el.getAttribute(attr) === val1){
+          this.setOrRemoveAttrs(el, [[attr, val2]], [])
+        } else {
+          this.setOrRemoveAttrs(el, [[attr, val1]], [])
+        }
+      } else {
+        // remove attr
+        this.setOrRemoveAttrs(el, [], [attr])
+      }
+    } else {
+      this.setOrRemoveAttrs(el, [[attr, val1]], [])
+    }
+  },
+
   exec_transition(eventType, phxEvent, view, sourceEl, el, {time, transition}){
     this.addOrRemoveClasses(el, [], [], transition, time, view)
   },
@@ -141,6 +175,7 @@ let JS = {
   },
 
   toggle(eventType, view, el, display, ins, outs, time){
+    time = time || default_transition_time
     let [inClasses, inStartClasses, inEndClasses] = ins || [[], [], []]
     let [outClasses, outStartClasses, outEndClasses] = outs || [[], [], []]
     if(inClasses.length > 0 || outClasses.length > 0){
@@ -193,13 +228,30 @@ let JS = {
     }
   },
 
+  toggleClasses(el, classes, transition, time, view){
+    window.requestAnimationFrame(() => {
+      let [prevAdds, prevRemoves] = DOM.getSticky(el, "classes", [[], []])
+      let newAdds = classes.filter(name => prevAdds.indexOf(name) < 0 && !el.classList.contains(name))
+      let newRemoves = classes.filter(name => prevRemoves.indexOf(name) < 0 && el.classList.contains(name))
+      this.addOrRemoveClasses(el, newAdds, newRemoves, transition, time, view)
+    })
+  },
+
   addOrRemoveClasses(el, adds, removes, transition, time, view){
-    let [transition_run, transition_start, transition_end] = transition || [[], [], []]
-    if(transition_run.length > 0){
-      let onStart = () => this.addOrRemoveClasses(el, transition_start.concat(transition_run), [])
-      let onDone = () => this.addOrRemoveClasses(el, adds.concat(transition_end), removes.concat(transition_run).concat(transition_start))
+    time = time || default_transition_time
+    let [transitionRun, transitionStart, transitionEnd] = transition || [[], [], []]
+    if(transitionRun.length > 0){
+      let onStart = () => {
+        this.addOrRemoveClasses(el, transitionStart, [].concat(transitionRun).concat(transitionEnd))
+        window.requestAnimationFrame(() => {
+          this.addOrRemoveClasses(el, transitionRun, [])
+          window.requestAnimationFrame(() => this.addOrRemoveClasses(el, transitionEnd, transitionStart))
+        })
+      }
+      let onDone = () => this.addOrRemoveClasses(el, adds.concat(transitionEnd), removes.concat(transitionRun).concat(transitionStart))
       return view.transition(time, onStart, onDone)
     }
+
     window.requestAnimationFrame(() => {
       let [prevAdds, prevRemoves] = DOM.getSticky(el, "classes", [[], []])
       let keepAdds = adds.filter(name => prevAdds.indexOf(name) < 0 && !el.classList.contains(name))
@@ -218,9 +270,9 @@ let JS = {
   setOrRemoveAttrs(el, sets, removes){
     let [prevSets, prevRemoves] = DOM.getSticky(el, "attrs", [[], []])
 
-    let alteredAttrs = sets.map(([attr, _val]) => attr).concat(removes);
-    let newSets = prevSets.filter(([attr, _val]) => !alteredAttrs.includes(attr)).concat(sets);
-    let newRemoves = prevRemoves.filter((attr) => !alteredAttrs.includes(attr)).concat(removes);
+    let alteredAttrs = sets.map(([attr, _val]) => attr).concat(removes)
+    let newSets = prevSets.filter(([attr, _val]) => !alteredAttrs.includes(attr)).concat(sets)
+    let newRemoves = prevRemoves.filter((attr) => !alteredAttrs.includes(attr)).concat(removes)
 
     DOM.putSticky(el, "attrs", currentEl => {
       newRemoves.forEach(attr => currentEl.removeAttribute(attr))

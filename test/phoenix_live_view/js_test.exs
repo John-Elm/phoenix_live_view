@@ -5,8 +5,11 @@ defmodule Phoenix.LiveView.JSTest do
 
   describe "exec" do
     test "with defaults" do
-      assert JS.exec("phx-remove") == %JS{ops: [["exec", ["phx-remove"]]]}
-      assert JS.exec("phx-remove", to: "#modal") == %JS{ops: [["exec", ["phx-remove", "#modal"]]]}
+      assert JS.exec("phx-remove") == %JS{ops: [["exec", %{attr: "phx-remove"}]]}
+
+      assert JS.exec("phx-remove", to: "#modal") == %JS{
+               ops: [["exec", %{attr: "phx-remove", to: "#modal"}]]
+             }
     end
   end
 
@@ -71,7 +74,7 @@ defmodule Phoenix.LiveView.JSTest do
     test "with defaults" do
       assert JS.add_class("show") == %JS{
                ops: [
-                 ["add_class", %{names: ["show"], time: 200, to: nil, transition: [[], [], []]}]
+                 ["add_class", %{names: ["show"]}]
                ]
              }
 
@@ -79,7 +82,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "add_class",
-                   %{names: ["show"], time: 200, to: "#modal", transition: [[], [], []]}
+                   %{names: ["show"], to: "#modal"}
                  ]
                ]
              }
@@ -90,7 +93,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "add_class",
-                   %{names: ["show", "hl"], time: 200, to: nil, transition: [[], [], []]}
+                   %{names: ["show", "hl"]}
                  ]
                ]
              }
@@ -99,7 +102,7 @@ defmodule Phoenix.LiveView.JSTest do
     test "custom time" do
       assert JS.add_class("show", time: 543) == %JS{
                ops: [
-                 ["add_class", %{names: ["show"], time: 543, to: nil, transition: [[], [], []]}]
+                 ["add_class", %{names: ["show"], time: 543}]
                ]
              }
     end
@@ -109,7 +112,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "add_class",
-                   %{names: ["show"], time: 200, to: nil, transition: [["fade"], [], []]}
+                   %{names: ["show"], transition: [["fade"], [], []]}
                  ]
                ]
              }
@@ -118,7 +121,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "add_class",
-                   %{names: ["c"], time: 200, to: nil, transition: [["a", "b"], [], []]}
+                   %{names: ["c"], transition: [["a", "b"], [], []]}
                  ]
                ]
              }
@@ -129,8 +132,6 @@ defmodule Phoenix.LiveView.JSTest do
                    "add_class",
                    %{
                      names: ["show"],
-                     time: 200,
-                     to: nil,
                      transition: [["fade"], ["opacity-0"], ["opacity-100"]]
                    }
                  ]
@@ -145,9 +146,9 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "add_class",
-                   %{names: ["show"], time: 100, to: "#modal", transition: [[], [], []]}
+                   %{names: ["show"], time: 100, to: "#modal"}
                  ],
-                 ["add_class", %{names: ["hl"], time: 200, to: nil, transition: [[], [], []]}]
+                 ["add_class", %{names: ["hl"]}]
                ]
              }
     end
@@ -160,7 +161,7 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "encoding" do
       assert js_to_string(JS.add_class("show")) ==
-               "[[&quot;add_class&quot;,{&quot;names&quot;:[&quot;show&quot;],&quot;time&quot;:200,&quot;to&quot;:null,&quot;transition&quot;:[[],[],[]]}]]"
+               "[[&quot;add_class&quot;,{&quot;names&quot;:[&quot;show&quot;]}]]"
     end
   end
 
@@ -170,7 +171,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["show"], time: 200, to: nil, transition: [[], [], []]}
+                   %{names: ["show"]}
                  ]
                ]
              }
@@ -179,7 +180,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["show"], time: 200, to: "#modal", transition: [[], [], []]}
+                   %{names: ["show"], to: "#modal"}
                  ]
                ]
              }
@@ -190,7 +191,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["show", "hl"], time: 200, to: nil, transition: [[], [], []]}
+                   %{names: ["show", "hl"]}
                  ]
                ]
              }
@@ -201,7 +202,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["show"], time: 543, to: nil, transition: [[], [], []]}
+                   %{names: ["show"], time: 543}
                  ]
                ]
              }
@@ -212,7 +213,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["show"], time: 200, to: nil, transition: [["fade"], [], []]}
+                   %{names: ["show"], transition: [["fade"], [], []]}
                  ]
                ]
              }
@@ -221,7 +222,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["c"], time: 200, to: nil, transition: [["a", "b"], [], []]}
+                   %{names: ["c"], transition: [["a", "b"], [], []]}
                  ]
                ]
              }
@@ -232,8 +233,6 @@ defmodule Phoenix.LiveView.JSTest do
                    "remove_class",
                    %{
                      names: ["show"],
-                     time: 200,
-                     to: nil,
                      transition: [["fade"], ["opacity-0"], ["opacity-100"]]
                    }
                  ]
@@ -248,9 +247,9 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "remove_class",
-                   %{names: ["show"], time: 100, to: "#modal", transition: [[], [], []]}
+                   %{names: ["show"], time: 100, to: "#modal"}
                  ],
-                 ["remove_class", %{names: ["hl"], time: 200, to: nil, transition: [[], [], []]}]
+                 ["remove_class", %{names: ["hl"]}]
                ]
              }
     end
@@ -263,7 +262,108 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "encoding" do
       assert js_to_string(JS.remove_class("show")) ==
-               "[[&quot;remove_class&quot;,{&quot;names&quot;:[&quot;show&quot;],&quot;time&quot;:200,&quot;to&quot;:null,&quot;transition&quot;:[[],[],[]]}]]"
+               "[[&quot;remove_class&quot;,{&quot;names&quot;:[&quot;show&quot;]}]]"
+    end
+  end
+
+  describe "toggle_class" do
+    test "with defaults" do
+      assert JS.toggle_class("show") == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["show"]}
+                 ]
+               ]
+             }
+
+      assert JS.toggle_class("show", to: "#modal") == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["show"], to: "#modal"}
+                 ]
+               ]
+             }
+    end
+
+    test "multiple classes" do
+      assert JS.toggle_class("show hl") == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["show", "hl"]}
+                 ]
+               ]
+             }
+    end
+
+    test "custom time" do
+      assert JS.toggle_class("show", time: 543) == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["show"], time: 543}
+                 ]
+               ]
+             }
+    end
+
+    test "transition" do
+      assert JS.toggle_class("show", transition: "fade") == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["show"], transition: [["fade"], [], []]}
+                 ]
+               ]
+             }
+
+      assert JS.toggle_class("c", transition: "a b") == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["c"], transition: [["a", "b"], [], []]}
+                 ]
+               ]
+             }
+
+      assert JS.toggle_class("show", transition: {"fade", "opacity-0", "opacity-100"}) == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{
+                     names: ["show"],
+                     transition: [["fade"], ["opacity-0"], ["opacity-100"]]
+                   }
+                 ]
+               ]
+             }
+    end
+
+    test "composability" do
+      js = JS.toggle_class("show", to: "#modal", time: 100) |> JS.toggle_class("hl")
+
+      assert js == %JS{
+               ops: [
+                 [
+                   "toggle_class",
+                   %{names: ["show"], time: 100, to: "#modal"}
+                 ],
+                 ["toggle_class", %{names: ["hl"]}]
+               ]
+             }
+    end
+
+    test "raises with unknown options" do
+      assert_raise ArgumentError, ~r/invalid option for toggle_class/, fn ->
+        JS.toggle_class("show", bad: :opt)
+      end
+    end
+
+    test "encoding" do
+      assert js_to_string(JS.toggle_class("show")) ==
+               "[[&quot;toggle_class&quot;,{&quot;names&quot;:[&quot;show&quot;]}]]"
     end
   end
 
@@ -274,13 +374,13 @@ defmodule Phoenix.LiveView.JSTest do
              }
 
       assert JS.dispatch("click") == %JS{
-               ops: [["dispatch", %{to: nil, event: "click"}]]
+               ops: [["dispatch", %{event: "click"}]]
              }
     end
 
     test "with optional flags" do
       assert JS.dispatch("click", bubbles: false) == %JS{
-               ops: [["dispatch", %{to: nil, event: "click", bubbles: false}]]
+               ops: [["dispatch", %{event: "click", bubbles: false}]]
              }
     end
 
@@ -306,7 +406,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  ["dispatch", %{to: "#modal", event: "click"}],
                  ["dispatch", %{to: "#keyboard", event: "keydown"}],
-                 ["dispatch", %{to: nil, event: "keyup"}]
+                 ["dispatch", %{event: "keyup"}]
                ]
              }
     end
@@ -323,7 +423,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "toggle",
-                   %{display: nil, ins: [[], [], []], outs: [[], [], []], time: 200, to: "#modal"}
+                   %{to: "#modal"}
                  ]
                ]
              }
@@ -336,10 +436,8 @@ defmodule Phoenix.LiveView.JSTest do
                    [
                      "toggle",
                      %{
-                       display: nil,
                        ins: [["fade-in", "d-block"], [], []],
                        outs: [["fade-out", "d-block"], [], []],
-                       time: 200,
                        to: "#modal"
                      }
                    ]
@@ -356,10 +454,8 @@ defmodule Phoenix.LiveView.JSTest do
                    [
                      "toggle",
                      %{
-                       display: nil,
                        ins: [["fade-in"], ["opacity-0"], ["opacity-100"]],
                        outs: [["fade-out"], ["opacity-100"], ["opacity-0"]],
-                       time: 200,
                        to: "#modal"
                      }
                    ]
@@ -372,7 +468,7 @@ defmodule Phoenix.LiveView.JSTest do
                ops: [
                  [
                    "toggle",
-                   %{display: nil, ins: [[], [], []], outs: [[], [], []], time: 123, to: "#modal"}
+                   %{time: 123, to: "#modal"}
                  ]
                ]
              }
@@ -385,9 +481,6 @@ defmodule Phoenix.LiveView.JSTest do
                    "toggle",
                    %{
                      display: "block",
-                     ins: [[], [], []],
-                     outs: [[], [], []],
-                     time: 200,
                      to: "#modal"
                    }
                  ]
@@ -406,34 +499,22 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 [
-                   "toggle",
-                   %{to: "#modal", display: nil, ins: [[], [], []], outs: [[], [], []], time: 200}
-                 ],
-                 [
-                   "toggle",
-                   %{
-                     to: "#keyboard",
-                     display: nil,
-                     ins: [[], [], []],
-                     outs: [[], [], []],
-                     time: 123
-                   }
-                 ]
+                 ["toggle", %{to: "#modal"}],
+                 ["toggle", %{to: "#keyboard", time: 123}]
                ]
              }
     end
 
     test "encoding" do
       assert js_to_string(JS.toggle(to: "#modal")) ==
-               "[[&quot;toggle&quot;,{&quot;display&quot;:null,&quot;ins&quot;:[[],[],[]],&quot;outs&quot;:[[],[],[]],&quot;time&quot;:200,&quot;to&quot;:&quot;#modal&quot;}]]"
+               "[[&quot;toggle&quot;,{&quot;to&quot;:&quot;#modal&quot;}]]"
     end
   end
 
   describe "show" do
     test "with defaults" do
       assert JS.show(to: "#modal") == %JS{
-               ops: [["show", %{display: nil, transition: [[], [], []], time: 200, to: "#modal"}]]
+               ops: [["show", %{to: "#modal"}]]
              }
     end
 
@@ -444,9 +525,7 @@ defmodule Phoenix.LiveView.JSTest do
                    [
                      "show",
                      %{
-                       display: nil,
                        transition: [["fade-in", "d-block"], [], []],
-                       time: 200,
                        to: "#modal"
                      }
                    ]
@@ -463,13 +542,11 @@ defmodule Phoenix.LiveView.JSTest do
                    [
                      "show",
                      %{
-                       display: nil,
                        transition: [
                          ["fade-in", "d-block"],
                          ["opacity-0", "-translate-x-full"],
                          ["opacity-100", "translate-x-0"]
                        ],
-                       time: 200,
                        to: "#modal"
                      }
                    ]
@@ -479,14 +556,14 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "custom time" do
       assert JS.show(to: "#modal", time: 123) == %JS{
-               ops: [["show", %{display: nil, transition: [[], [], []], time: 123, to: "#modal"}]]
+               ops: [["show", %{time: 123, to: "#modal"}]]
              }
     end
 
     test "custom display" do
       assert JS.show(to: "#modal", display: "block") == %JS{
                ops: [
-                 ["show", %{display: "block", transition: [[], [], []], time: 200, to: "#modal"}]
+                 ["show", %{display: "block", to: "#modal"}]
                ]
              }
     end
@@ -502,22 +579,22 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["show", %{to: "#modal", display: nil, transition: [[], [], []], time: 200}],
-                 ["show", %{to: "#keyboard", display: nil, transition: [[], [], []], time: 123}]
+                 ["show", %{to: "#modal"}],
+                 ["show", %{to: "#keyboard", time: 123}]
                ]
              }
     end
 
     test "encoding" do
       assert js_to_string(JS.show(to: "#modal")) ==
-               "[[&quot;show&quot;,{&quot;display&quot;:null,&quot;time&quot;:200,&quot;to&quot;:&quot;#modal&quot;,&quot;transition&quot;:[[],[],[]]}]]"
+               "[[&quot;show&quot;,{&quot;to&quot;:&quot;#modal&quot;}]]"
     end
   end
 
   describe "hide" do
     test "with defaults" do
       assert JS.hide(to: "#modal") == %JS{
-               ops: [["hide", %{transition: [[], [], []], time: 200, to: "#modal"}]]
+               ops: [["hide", %{to: "#modal"}]]
              }
     end
 
@@ -529,7 +606,6 @@ defmodule Phoenix.LiveView.JSTest do
                      "hide",
                      %{
                        transition: [["fade-out", "d-block"], [], []],
-                       time: 200,
                        to: "#modal"
                      }
                    ]
@@ -551,7 +627,6 @@ defmodule Phoenix.LiveView.JSTest do
                          ["opacity-0", "-translate-x-full"],
                          ["opacity-100", "translate-x-0"]
                        ],
-                       time: 200,
                        to: "#modal"
                      }
                    ]
@@ -561,7 +636,7 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "custom time" do
       assert JS.hide(to: "#modal", time: 123) == %JS{
-               ops: [["hide", %{transition: [[], [], []], time: 123, to: "#modal"}]]
+               ops: [["hide", %{time: 123, to: "#modal"}]]
              }
     end
 
@@ -576,33 +651,33 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["hide", %{to: "#modal", transition: [[], [], []], time: 200}],
-                 ["hide", %{to: "#keyboard", transition: [[], [], []], time: 123}]
+                 ["hide", %{to: "#modal"}],
+                 ["hide", %{to: "#keyboard", time: 123}]
                ]
              }
     end
 
     test "encoding" do
       assert js_to_string(JS.hide(to: "#modal")) ==
-               "[[&quot;hide&quot;,{&quot;time&quot;:200,&quot;to&quot;:&quot;#modal&quot;,&quot;transition&quot;:[[],[],[]]}]]"
+               "[[&quot;hide&quot;,{&quot;to&quot;:&quot;#modal&quot;}]]"
     end
   end
 
   describe "transition" do
     test "with defaults" do
       assert JS.transition("shake") == %JS{
-               ops: [["transition", %{transition: [["shake"], [], []], time: 200, to: nil}]]
+               ops: [["transition", %{transition: [["shake"], [], []]}]]
              }
 
       assert JS.transition("shake", to: "#modal") == %JS{
-               ops: [["transition", %{transition: [["shake"], [], []], time: 200, to: "#modal"}]]
+               ops: [["transition", %{transition: [["shake"], [], []], to: "#modal"}]]
              }
 
       assert JS.transition("shake swirl", to: "#modal") == %JS{
                ops: [
                  [
                    "transition",
-                   %{transition: [["shake", "swirl"], [], []], time: 200, to: "#modal"}
+                   %{transition: [["shake", "swirl"], [], []], to: "#modal"}
                  ]
                ]
              }
@@ -613,7 +688,6 @@ defmodule Phoenix.LiveView.JSTest do
                    "transition",
                    %{
                      transition: [["shake", "swirl"], ["opacity-0", "a"], ["opacity-100", "b"]],
-                     time: 200,
                      to: "#modal"
                    }
                  ]
@@ -638,7 +712,7 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["transition", %{to: "#modal", transition: [["shake"], [], []], time: 200}],
+                 ["transition", %{to: "#modal", transition: [["shake"], [], []]}],
                  ["transition", %{to: "#keyboard", transition: [["hl"], [], []], time: 123}]
                ]
              }
@@ -646,7 +720,7 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "encoding" do
       assert js_to_string(JS.transition("shake", to: "#modal")) ==
-               "[[&quot;transition&quot;,{&quot;time&quot;:200,&quot;to&quot;:&quot;#modal&quot;,&quot;transition&quot;:[[&quot;shake&quot;],[],[]]}]]"
+               "[[&quot;transition&quot;,{&quot;to&quot;:&quot;#modal&quot;,&quot;transition&quot;:[[&quot;shake&quot;],[],[]]}]]"
     end
   end
 
@@ -654,7 +728,7 @@ defmodule Phoenix.LiveView.JSTest do
     test "with defaults" do
       assert JS.set_attribute({"aria-expanded", "true"}) == %JS{
                ops: [
-                 ["set_attr", %{attr: ["aria-expanded", "true"], to: nil}]
+                 ["set_attr", %{attr: ["aria-expanded", "true"]}]
                ]
              }
 
@@ -673,8 +747,8 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["set_attr", %{to: nil, attr: ["expanded", "true"]}],
-                 ["set_attr", %{to: nil, attr: ["has-popup", "true"]}],
+                 ["set_attr", %{attr: ["expanded", "true"]}],
+                 ["set_attr", %{attr: ["has-popup", "true"]}],
                  ["set_attr", %{to: "#dropdown", attr: ["has-popup", "true"]}]
                ]
              }
@@ -688,7 +762,7 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "encoding" do
       assert js_to_string(JS.set_attribute({"disabled", "true"})) ==
-               "[[&quot;set_attr&quot;,{&quot;attr&quot;:[&quot;disabled&quot;,&quot;true&quot;],&quot;to&quot;:null}]]"
+               "[[&quot;set_attr&quot;,{&quot;attr&quot;:[&quot;disabled&quot;,&quot;true&quot;]}]]"
     end
   end
 
@@ -696,7 +770,7 @@ defmodule Phoenix.LiveView.JSTest do
     test "with defaults" do
       assert JS.remove_attribute("aria-expanded") == %JS{
                ops: [
-                 ["remove_attr", %{attr: "aria-expanded", to: nil}]
+                 ["remove_attr", %{attr: "aria-expanded"}]
                ]
              }
 
@@ -715,8 +789,8 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["remove_attr", %{to: nil, attr: "expanded"}],
-                 ["remove_attr", %{to: nil, attr: "has-popup"}],
+                 ["remove_attr", %{attr: "expanded"}],
+                 ["remove_attr", %{attr: "has-popup"}],
                  ["remove_attr", %{to: "#dropdown", attr: "has-popup"}]
                ]
              }
@@ -730,13 +804,65 @@ defmodule Phoenix.LiveView.JSTest do
 
     test "encoding" do
       assert js_to_string(JS.remove_attribute("disabled")) ==
-               "[[&quot;remove_attr&quot;,{&quot;attr&quot;:&quot;disabled&quot;,&quot;to&quot;:null}]]"
+               "[[&quot;remove_attr&quot;,{&quot;attr&quot;:&quot;disabled&quot;}]]"
+    end
+  end
+
+  describe "toggle_attribute" do
+    test "with defaults" do
+      assert JS.toggle_attribute({"open", "true"}) == %JS{
+               ops: [
+                 ["toggle_attr", %{attr: ["open", "true"]}]
+               ]
+             }
+
+      assert JS.toggle_attribute({"open", "true"}, to: "#dropdown") == %JS{
+               ops: [
+                 ["toggle_attr", %{attr: ["open", "true"], to: "#dropdown"}]
+               ]
+             }
+
+      assert JS.toggle_attribute({"aria-expanded", "true", "false"}, to: "#dropdown") == %JS{
+               ops: [
+                 ["toggle_attr", %{attr: ["aria-expanded", "true", "false"], to: "#dropdown"}]
+               ]
+             }
+    end
+
+    test "composability" do
+      js =
+        {"aria-expanded", "true", "false"}
+        |> JS.toggle_attribute()
+        |> JS.toggle_attribute({"open", "true"})
+        |> JS.toggle_attribute({"disabled", "true"}, to: "#dropdown")
+
+      assert js == %JS{
+               ops: [
+                 ["toggle_attr", %{attr: ["aria-expanded", "true", "false"]}],
+                 ["toggle_attr", %{attr: ["open", "true"]}],
+                 ["toggle_attr", %{to: "#dropdown", attr: ["disabled", "true"]}]
+               ]
+             }
+    end
+
+    test "raises with unknown options" do
+      assert_raise ArgumentError, ~r/invalid option for toggle_attribute/, fn ->
+        JS.toggle_attribute({"disabled", "true"}, bad: :opt)
+      end
+    end
+
+    test "encoding" do
+      assert js_to_string(JS.toggle_attribute({"disabled", "true"})) ==
+               "[[&quot;toggle_attr&quot;,{&quot;attr&quot;:[&quot;disabled&quot;,&quot;true&quot;]}]]"
+
+      assert js_to_string(JS.toggle_attribute({"aria-expanded", "true", "false"})) ==
+               "[[&quot;toggle_attr&quot;,{&quot;attr&quot;:[&quot;aria-expanded&quot;,&quot;true&quot;,&quot;false&quot;]}]]"
     end
   end
 
   describe "focus" do
     test "with defaults" do
-      assert JS.focus() == %JS{ops: [["focus", %{to: nil}]]}
+      assert JS.focus() == %JS{ops: [["focus", %{}]]}
       assert JS.focus(to: "input") == %JS{ops: [["focus", %{to: "input"}]]}
     end
 
@@ -746,7 +872,7 @@ defmodule Phoenix.LiveView.JSTest do
         |> JS.focus()
 
       assert js == %JS{
-               ops: [["set_attr", %{attr: ["expanded", "true"], to: nil}], ["focus", %{to: nil}]]
+               ops: [["set_attr", %{attr: ["expanded", "true"]}], ["focus", %{}]]
              }
     end
 
@@ -757,13 +883,13 @@ defmodule Phoenix.LiveView.JSTest do
     end
 
     test "encoding" do
-      assert js_to_string(JS.focus()) == "[[&quot;focus&quot;,{&quot;to&quot;:null}]]"
+      assert js_to_string(JS.focus()) == "[[&quot;focus&quot;,{}]]"
     end
   end
 
   describe "focus_first" do
     test "with defaults" do
-      assert JS.focus_first() == %JS{ops: [["focus_first", %{to: nil}]]}
+      assert JS.focus_first() == %JS{ops: [["focus_first", %{}]]}
       assert JS.focus_first(to: "input") == %JS{ops: [["focus_first", %{to: "input"}]]}
     end
 
@@ -774,8 +900,8 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["set_attr", %{attr: ["expanded", "true"], to: nil}],
-                 ["focus_first", %{to: nil}]
+                 ["set_attr", %{attr: ["expanded", "true"]}],
+                 ["focus_first", %{}]
                ]
              }
     end
@@ -787,13 +913,13 @@ defmodule Phoenix.LiveView.JSTest do
     end
 
     test "encoding" do
-      assert js_to_string(JS.focus_first()) == "[[&quot;focus_first&quot;,{&quot;to&quot;:null}]]"
+      assert js_to_string(JS.focus_first()) == "[[&quot;focus_first&quot;,{}]]"
     end
   end
 
   describe "push_focus" do
     test "with defaults" do
-      assert JS.push_focus() == %JS{ops: [["push_focus", %{to: nil}]]}
+      assert JS.push_focus() == %JS{ops: [["push_focus", %{}]]}
       assert JS.push_focus(to: "input") == %JS{ops: [["push_focus", %{to: "input"}]]}
     end
 
@@ -804,8 +930,8 @@ defmodule Phoenix.LiveView.JSTest do
 
       assert js == %JS{
                ops: [
-                 ["set_attr", %{attr: ["expanded", "true"], to: nil}],
-                 ["push_focus", %{to: nil}]
+                 ["set_attr", %{attr: ["expanded", "true"]}],
+                 ["push_focus", %{}]
                ]
              }
     end
@@ -817,7 +943,7 @@ defmodule Phoenix.LiveView.JSTest do
     end
 
     test "encoding" do
-      assert js_to_string(JS.push_focus()) == "[[&quot;push_focus&quot;,{&quot;to&quot;:null}]]"
+      assert js_to_string(JS.push_focus()) == "[[&quot;push_focus&quot;,{}]]"
     end
   end
 
@@ -832,7 +958,7 @@ defmodule Phoenix.LiveView.JSTest do
         |> JS.pop_focus()
 
       assert js == %JS{
-               ops: [["set_attr", %{attr: ["expanded", "true"], to: nil}], ["pop_focus", %{}]]
+               ops: [["set_attr", %{attr: ["expanded", "true"]}], ["pop_focus", %{}]]
              }
     end
 
@@ -843,7 +969,23 @@ defmodule Phoenix.LiveView.JSTest do
 
   defp js_to_string(%JS{} = js) do
     js
+    |> Map.update!(:ops, &order_ops_map_keys/1)
     |> Phoenix.HTML.Safe.to_iodata()
     |> IO.iodata_to_binary()
+  end
+
+  defp order_ops_map_keys(ops) when is_list(ops) do
+    Enum.map(ops, &order_ops_map_keys/1)
+  end
+
+  defp order_ops_map_keys(ops) when is_map(ops) do
+    ops
+    |> Enum.map(&order_ops_map_keys/1)
+    |> Enum.sort_by(fn {k, _v} -> k end)
+    |> Jason.OrderedObject.new()
+  end
+
+  defp order_ops_map_keys(ops) do
+    ops
   end
 end

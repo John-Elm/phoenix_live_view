@@ -14,6 +14,8 @@ import {
   PHX_CLIENT_ERROR_CLASS,
   PHX_SERVER_ERROR_CLASS,
   PHX_FEEDBACK_FOR,
+  PHX_FEEDBACK_GROUP,
+  PHX_HAS_FOCUSED,
   PHX_HAS_SUBMITTED,
   PHX_HOOK,
   PHX_PAGE_LOADING,
@@ -56,18 +58,28 @@ import ViewHook from "./view_hook"
 import JS from "./js"
 
 let serializeForm = (form, metadata, onlyNames = []) => {
-  let {submitter, ...meta} = metadata
+  const {submitter, ...meta} = metadata
 
-  // TODO: Replace with `new FormData(form, submitter)` when supported by latest browsers,
-  //       and mention `formdata-submitter-polyfill` in the docs.
-  let formData = new FormData(form)
-
-  // TODO: Remove when FormData constructor supports the submitter argument.
-  if(submitter && submitter.hasAttribute("name") && submitter.form && submitter.form === form){
-    formData.append(submitter.name, submitter.value)
+  // We must inject the submitter in the order that it exists in the DOM
+  // releative to other inputs. For example, for checkbox groups, the order must be maintained.
+  let injectedElement
+  if(submitter && submitter.name){
+    const input = document.createElement("input")
+    input.type = "hidden"
+    // set the form attribute if the submitter has one;
+    // this can happen if the element is outside the actual form element
+    const formId = submitter.getAttribute("form")
+    if(formId){
+      input.setAttribute("form", formId)
+    }
+    input.name = submitter.name
+    input.value = submitter.value
+    submitter.parentElement.insertBefore(input, submitter)
+    injectedElement = input
   }
 
-  let toRemove = []
+  const formData = new FormData(form)
+  const toRemove = []
 
   formData.forEach((val, key, _index) => {
     if(val instanceof File){ toRemove.push(key) }
@@ -76,12 +88,20 @@ let serializeForm = (form, metadata, onlyNames = []) => {
   // Cleanup after building fileData
   toRemove.forEach(key => formData.delete(key))
 
-  let params = new URLSearchParams()
+  const params = new URLSearchParams()
+
   for(let [key, val] of formData.entries()){
     if(onlyNames.length === 0 || onlyNames.indexOf(key) >= 0){
       params.append(key, val)
     }
   }
+
+  // remove the injected element again
+  // (it would be removed by the next dom patch anyway, but this is cleaner)
+  if(submitter && injectedElement){
+    submitter.parentElement.removeChild(injectedElement)
+  }
+
   for(let metaKey in meta){ params.append(metaKey, meta[metaKey]) }
 
   return params.toString()
@@ -115,9 +135,10 @@ export default class View {
     this.children = this.parent ? null : {}
     this.root.children[this.id] = {}
     this.channel = this.liveSocket.channel(`lv:${this.id}`, () => {
+      let url = this.href && this.expandURL(this.href)
       return {
-        redirect: this.redirect ? this.href : undefined,
-        url: this.redirect ? undefined : this.href || undefined,
+        redirect: this.redirect ? url : undefined,
+        url: this.redirect ? undefined : url || undefined,
         params: this.connectParams(liveReferer),
         session: this.getSession(),
         static: this.getStatic(),
@@ -302,6 +323,9 @@ export default class View {
       let fromEl = toEl.id && this.el.querySelector(`[id="${toEl.id}"]`)
       let phxStatic = fromEl && fromEl.getAttribute(PHX_STATIC)
       if(phxStatic){ toEl.setAttribute(PHX_STATIC, phxStatic) }
+      // set PHX_ROOT_ID to prevent events from being dispatched to the root view
+      // while the child join is still pending
+      if(fromEl){ fromEl.setAttribute(PHX_ROOT_ID, this.root.id) }
       return this.joinChild(toEl)
     })
 
@@ -340,7 +364,7 @@ export default class View {
     this.attachTrueDocEl()
     let patch = new DOMPatch(this, this.el, this.id, html, streams, null)
     patch.markPrunableContentForRemoval()
-    this.performPatch(patch, false)
+    this.performPatch(patch, false, true)
     this.joinNewChildren()
     this.execNewMounted()
 
@@ -381,13 +405,16 @@ export default class View {
     if(newHook){ newHook.__mounted() }
   }
 
-  performPatch(patch, pruneCids){
+  performPatch(patch, pruneCids, isJoinPatch = false){
     let removedEls = []
     let phxChildrenAdded = false
     let updatedHookIds = new Set()
 
     patch.after("added", el => {
       this.liveSocket.triggerDOM("onNodeAdded", [el])
+      let phxViewportTop = this.binding(PHX_VIEWPORT_TOP)
+      let phxViewportBottom = this.binding(PHX_VIEWPORT_BOTTOM)
+      DOM.maybeAddPrivateHooks(el, phxViewportTop, phxViewportBottom)
       this.maybeAddNewHook(el)
       if(el.getAttribute){ this.maybeMounted(el) }
     })
@@ -414,7 +441,7 @@ export default class View {
     })
 
     patch.after("transitionsDiscarded", els => this.afterElementsRemoved(els, pruneCids))
-    patch.perform()
+    patch.perform(isJoinPatch)
     this.afterElementsRemoved(removedEls, pruneCids)
 
     return phxChildrenAdded
@@ -656,10 +683,12 @@ export default class View {
   onJoinError(resp){
     if(resp.reason === "reload"){
       this.log("error", () => [`failed mount with ${resp.status}. Falling back to page request`, resp])
-      return this.onRedirect({to: this.href})
+      if(this.isMain()){ this.onRedirect({to: this.href}) }
+      return
     } else if(resp.reason === "unauthorized" || resp.reason === "stale"){
       this.log("error", () => ["unauthorized live_redirect. Falling back to page request", resp])
-      return this.onRedirect({to: this.href})
+      if(this.isMain()){ this.onRedirect({to: this.href}) }
+      return
     }
     if(resp.redirect || resp.live_redirect){
       this.joinPending = false
@@ -747,12 +776,13 @@ export default class View {
 
     DOM.all(document, `[${PHX_REF_SRC}="${this.id}"][${PHX_REF}="${ref}"]`, el => {
       let disabledVal = el.getAttribute(PHX_DISABLED)
+      let readOnlyVal = el.getAttribute(PHX_READONLY)
       // remove refs
       el.removeAttribute(PHX_REF)
       el.removeAttribute(PHX_REF_SRC)
       // restore inputs
-      if(el.getAttribute(PHX_READONLY) !== null){
-        el.readOnly = false
+      if(readOnlyVal !== null){
+        el.readOnly = readOnlyVal === "true" ? true : false
         el.removeAttribute(PHX_READONLY)
       }
       if(disabledVal !== null){
@@ -792,6 +822,8 @@ export default class View {
           el.setAttribute(PHX_DISABLE_WITH_RESTORE, el.innerText)
         }
         if(disableText !== ""){ el.innerText = disableText }
+        // PHX_DISABLED could have already been set in disableForm
+        el.setAttribute(PHX_DISABLED, el.getAttribute(PHX_DISABLED) || el.disabled)
         el.setAttribute("disabled", "")
       }
     })
@@ -806,7 +838,7 @@ export default class View {
   targetComponentID(target, targetCtx, opts = {}){
     if(isCid(targetCtx)){ return targetCtx }
 
-    let cidOrSelector = target.getAttribute(this.binding("target"))
+    let cidOrSelector = opts.target || target.getAttribute(this.binding("target"))
     if(isCid(cidOrSelector)){
       return parseInt(cidOrSelector)
     } else if(targetCtx && (cidOrSelector !== null || opts.target)){
@@ -888,10 +920,11 @@ export default class View {
 
   pushInput(inputEl, targetCtx, forceCid, phxEvent, opts, callback){
     let uploads
-    let cid = isCid(forceCid) ? forceCid : this.targetComponentID(inputEl.form, targetCtx)
+    let cid = isCid(forceCid) ? forceCid : this.targetComponentID(inputEl.form, targetCtx, opts)
     let refGenerator = () => this.putRef([inputEl, inputEl.form], "change", opts)
     let formData
     let meta  = this.extractMeta(inputEl.form)
+    if(inputEl instanceof HTMLButtonElement){ meta.submitter = inputEl }
     if(inputEl.getAttribute(this.binding("change"))){
       formData = serializeForm(inputEl.form, {_target: opts._target, ...meta}, [inputEl.name])
     } else {
@@ -910,13 +943,14 @@ export default class View {
       cid: cid
     }
     this.pushWithReply(refGenerator, "event", event, resp => {
-      DOM.showError(inputEl, this.liveSocket.binding(PHX_FEEDBACK_FOR))
-      if(DOM.isUploadInput(inputEl) && inputEl.getAttribute("data-phx-auto-upload") !== null){
+      DOM.showError(inputEl, this.liveSocket.binding(PHX_FEEDBACK_FOR), this.liveSocket.binding(PHX_FEEDBACK_GROUP))
+      if(DOM.isUploadInput(inputEl) && DOM.isAutoUpload(inputEl)){
         if(LiveUploader.filesAwaitingPreflight(inputEl).length > 0){
           let [ref, _els] = refGenerator()
           this.uploadFiles(inputEl.form, targetCtx, ref, cid, (_uploads) => {
             callback && callback(resp)
             this.triggerAwaitingSubmit(inputEl.form)
+            this.undoRefs(ref)
           })
         }
       } else {
@@ -992,7 +1026,7 @@ export default class View {
     let cid = this.targetComponentID(formEl, targetCtx)
     if(LiveUploader.hasUploadsInProgress(formEl)){
       let [ref, _els] = refGenerator()
-      let push = () => this.pushFormSubmit(formEl, submitter, targetCtx, phxEvent, opts, onReply)
+      let push = () => this.pushFormSubmit(formEl, targetCtx, phxEvent, submitter, opts, onReply)
       return this.scheduleSubmit(formEl, ref, opts, push)
     } else if(LiveUploader.inputsAwaitingPreflight(formEl).length > 0){
       let [ref, els] = refGenerator()
@@ -1060,11 +1094,23 @@ export default class View {
     })
   }
 
-  dispatchUploads(name, filesOrBlobs){
-    let inputs = DOM.findUploadInputs(this.el).filter(el => el.name === name)
+  dispatchUploads(targetCtx, name, filesOrBlobs){
+    let targetElement = this.targetCtxElement(targetCtx) || this.el
+    let inputs = DOM.findUploadInputs(targetElement).filter(el => el.name === name)
     if(inputs.length === 0){ logError(`no live file inputs found matching the name "${name}"`) }
     else if(inputs.length > 1){ logError(`duplicate live file inputs found matching the name "${name}"`) }
     else { DOM.dispatchEvent(inputs[0], PHX_TRACK_UPLOADS, {detail: {files: filesOrBlobs}}) }
+  }
+
+  targetCtxElement(targetCtx) {
+    if(isCid(targetCtx)){
+      let [target] = DOM.findComponentNodeList(this.el, targetCtx)
+      return target
+    } else if(targetCtx) {
+      return targetCtx
+    } else {
+      return null
+    }
   }
 
   pushFormRecovery(form, newCid, callback){
@@ -1073,7 +1119,10 @@ export default class View {
       let inputs = Array.from(form.elements).filter(el => DOM.isFormInput(el) && el.name && !el.hasAttribute(phxChange))
       if(inputs.length === 0){ return }
 
+      // we must clear tracked uploads before recovery as they no longer have valid refs
+      inputs.forEach(input => input.hasAttribute(PHX_UPLOAD_REF) && LiveUploader.clearFiles(input))
       let input = inputs.find(el => el.type !== "hidden") || inputs[0]
+
       let phxEvent = form.getAttribute(this.binding(PHX_AUTO_RECOVER)) || form.getAttribute(this.binding("change"))
       JS.exec("change", phxEvent, view, input, ["push", {_target: input.name, newCid: newCid, callback: callback}])
     })
@@ -1119,7 +1168,10 @@ export default class View {
         .filter(form => form.elements.length > 0)
         .filter(form => form.getAttribute(this.binding(PHX_AUTO_RECOVER)) !== "ignore")
         .map(form => {
-          let newForm = template.content.querySelector(`form[id="${form.id}"][${phxChange}="${form.getAttribute(phxChange)}"]`)
+          // attribute given via JS module needs to be escaped as it contains the symbols []",
+          // which result in an invalid css selector otherwise.
+          const phxChangeValue = CSS.escape(form.getAttribute(phxChange))
+          let newForm = template.content.querySelector(`form[id="${form.id}"][${phxChange}="${phxChangeValue}"]`)
           if(newForm){
             return [form, newForm, this.targetComponentID(newForm)]
           } else {
@@ -1131,17 +1183,18 @@ export default class View {
   }
 
   maybePushComponentsDestroyed(destroyedCIDs){
-    let willDestroyCIDs = destroyedCIDs.filter(cid => {
+    let willDestroyCIDs = destroyedCIDs.concat(this.pruningCIDs).filter(cid => {
       return DOM.findComponentNodeList(this.el, cid).length === 0
     })
+    // make sure this is a copy and not a reference
+    this.pruningCIDs = willDestroyCIDs.concat([])
+
     if(willDestroyCIDs.length > 0){
-      this.pruningCIDs.push(...willDestroyCIDs)
+      // we must reset the render change tracking for cids that
+      // could be added back from the server so we don't skip them
+      willDestroyCIDs.forEach(cid => this.rendered.resetRender(cid))
 
       this.pushWithReply(null, "cids_will_destroy", {cids: willDestroyCIDs}, () => {
-        // The cids are either back on the page or they will be fully removed,
-        // so we can remove them from the pruningCIDs.
-        this.pruningCIDs = this.pruningCIDs.filter(cid => willDestroyCIDs.indexOf(cid) !== -1)
-
         // See if any of the cids we wanted to destroy were added back,
         // if they were added back, we don't actually destroy them.
         let completelyDestroyCIDs = willDestroyCIDs.filter(cid => {
@@ -1150,6 +1203,7 @@ export default class View {
 
         if(completelyDestroyCIDs.length > 0){
           this.pushWithReply(null, "cids_destroyed", {cids: completelyDestroyCIDs}, (resp) => {
+            this.pruningCIDs = this.pruningCIDs.filter(cid => resp.cids.indexOf(cid) === -1)
             this.rendered.pruneCIDs(resp.cids)
           })
         }
@@ -1166,12 +1220,13 @@ export default class View {
 
   submitForm(form, targetCtx, phxEvent, submitter, opts = {}){
     DOM.putPrivate(form, PHX_HAS_SUBMITTED, true)
-    let phxFeedback = this.liveSocket.binding(PHX_FEEDBACK_FOR)
-    let inputs = Array.from(form.elements)
+    const phxFeedbackFor = this.liveSocket.binding(PHX_FEEDBACK_FOR)
+    const phxFeedbackGroup = this.liveSocket.binding(PHX_FEEDBACK_GROUP)
+    const inputs = Array.from(form.elements)
     inputs.forEach(input => DOM.putPrivate(input, PHX_HAS_SUBMITTED, true))
     this.liveSocket.blurActiveElement(this)
     this.pushFormSubmit(form, targetCtx, phxEvent, submitter, opts, () => {
-      inputs.forEach(input => DOM.showError(input, phxFeedback))
+      inputs.forEach(input => DOM.showError(input, phxFeedbackFor, phxFeedbackGroup))
       this.liveSocket.restorePreviouslyActiveFocus()
     })
   }

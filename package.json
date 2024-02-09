@@ -1,6 +1,6 @@
 {
   "name": "phoenix_live_view",
-  "version": "0.19.5",
+  "version": "0.20.5",
   "description": "The Phoenix LiveView JavaScript client.",
   "license": "MIT",
   "module": "./priv/static/phoenix_live_view.esm.js",
@@ -22,5 +22,12 @@
     "package.json",
     "priv/static/*",
     "assets/js/phoenix_live_view/*"
-  ]
+  ],
+  "devDependencies": {
+    "@playwright/test": "^1.41.0"
+  },
+  "scripts": {
+    "e2e:server": "MIX_ENV=e2e mix run test/e2e/test_helper.exs",
+    "e2e:test": "mix assets.build && cd test/e2e && npx playwright test"
+  }
 }

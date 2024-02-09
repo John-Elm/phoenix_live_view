@@ -81,8 +81,9 @@ defmodule Phoenix.LiveView.Router do
       callback. This can be used to customize a LiveView which may be invoked from
       different routes.
 
-    * `:private` - an optional map of private data to put in the plug connection,
-      for example: `%{route_name: :foo, access: :user}`.
+    * `:private` - an optional map of private data to put in the *plug connection*,
+      for example: `%{route_name: :foo, access: :user}`. The data will be available
+      inside `conn.private` in plug functions.
 
   ## Examples
 
@@ -127,13 +128,20 @@ defmodule Phoenix.LiveView.Router do
   `live_redirect` from the client with navigation purely over the existing
   websocket connection. This allows live routes defined in the router to
   mount a new root LiveView without additional HTTP requests to the server.
+  For backwards compatibility reasons, all live routes defined outside
+  of any live session are considered part of a single unnamed live session.
 
   ## Security Considerations
 
-  You must always perform authentication and authorization in your LiveViews.
-  If your application handle both regular HTTP requests and LiveViews, then
-  you must perform authentication and authorization on both. This is important
-  because `live_redirect`s *do not go through the plug pipeline*.
+  In a regular web application, we perform authentication and authorization
+  checks on every request. Given LiveViews start as a regular HTTP request,
+  they share the authentication logic with regular requests through plugs.
+  Once the user is authenticated, we typically validate the sessions on
+  the `mount` callback. Authorization rules generally happen on `mount`
+  (for instance, is the user allowed to see this page?) and also on
+  `handle_event` (is the user allowed to delete this item?). Performing
+  authorization on mount is important because `live_redirect`s *do not go
+  through the plug pipeline*.
 
   `live_session` can be used to draw boundaries between groups of LiveViews.
   Redirecting between `live_session`s will always force a full page reload
@@ -145,11 +153,17 @@ defmodule Phoenix.LiveView.Router do
   detailed description and general tips on authentication, authorization,
   and more.
 
+  > #### `live_session` and `forward` {: .warning}
+  >
+  > `live_session` does not currently work with `forward`. LiveView expects
+  > your `live` routes to always be directly defined within the main router
+  > of your application.
+
   ## Options
 
     * `:session` - The optional extra session map or MFA tuple to be merged with
-      the LiveView session. For example, `%{"admin" => true}`, `{MyMod, :session, []}`.
-      For MFA, the function is invoked, passing the `Plug.Conn` struct is prepended
+      the LiveView session. For example, `%{"admin" => true}` or `{MyMod, :session, []}`.
+      For MFA, the function is invoked and the `Plug.Conn` struct is prepended
       to the arguments list.
 
     * `:root_layout` - The optional root layout tuple for the initial HTTP render to
@@ -312,7 +326,12 @@ defmodule Phoenix.LiveView.Router do
         """
 
       {:on_mount, on_mount}, acc ->
-        hooks = Enum.map(List.wrap(on_mount), &Phoenix.LiveView.Lifecycle.on_mount(module, &1))
+        hooks =
+          on_mount
+          |> List.wrap()
+          |> Enum.map(&Phoenix.LiveView.Lifecycle.validate_on_mount!(module, &1))
+          |> Phoenix.LiveView.Lifecycle.prepare_on_mount!()
+
         Map.put(acc, :on_mount, hooks)
 
       {key, _val}, _acc ->
@@ -350,7 +369,7 @@ defmodule Phoenix.LiveView.Router do
         ...
       end
   """
-  def fetch_live_flash(%Plug.Conn{} = conn, _) do
+  def fetch_live_flash(%Plug.Conn{} = conn, _opts \\ []) do
     case cookie_flash(conn) do
       {conn, nil} ->
         Phoenix.Controller.fetch_flash(conn, [])

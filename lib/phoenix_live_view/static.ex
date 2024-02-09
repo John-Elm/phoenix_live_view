@@ -16,11 +16,9 @@ defmodule Phoenix.LiveView.Static do
   Acts as a view via put_view to maintain the
   controller render + instrumentation stack.
   """
-  def render("template.html", %{content: content}) do
+  def render(_, %{content: content}) do
     content
   end
-
-  def render(_other, _assigns), do: nil
 
   @doc """
   Verifies a LiveView token.
@@ -81,8 +79,7 @@ defmodule Phoenix.LiveView.Static do
     * `:router` - the router the live view was built at
     * `:action` - the router action
     * `:session` - the required map of session data
-    * `:container` - the optional tuple for the HTML tag and DOM attributes to
-      be used for the LiveView container. For example: `{:li, style: "color: blue;"}`
+    * `:container` - the optional tuple for the HTML tag and DOM attributes
   """
   def render(%Plug.Conn{} = conn, view, opts) do
     conn_session = maybe_get_session(conn)
@@ -108,7 +105,7 @@ defmodule Phoenix.LiveView.Static do
           conn_session: conn_session,
           lifecycle: lifecycle,
           root_view: view,
-          __temp__: %{}
+          live_temp: %{}
         }
         |> maybe_put_live_layout(live_session),
         action,
@@ -181,7 +178,7 @@ defmodule Phoenix.LiveView.Static do
           lifecycle: config.lifecycle,
           live_layout: false,
           root_view: if(sticky?, do: view, else: parent.private.root_view),
-          __temp__: %{}
+          live_temp: %{}
         },
         nil,
         %{},
@@ -244,13 +241,19 @@ defmodule Phoenix.LiveView.Static do
       | extended_attrs
     ]
 
-    Phoenix.HTML.Tag.content_tag(tag, "", attrs)
+    content_tag(tag, attrs, "")
   end
 
   defp to_rendered_content_tag(socket, tag, view, attrs) do
-    rendered = Utils.to_rendered(socket, view)
+    rendered = Phoenix.LiveView.Renderer.to_rendered(socket, view)
     {_, diff, _} = Diff.render(socket, rendered, Diff.new_components())
-    Phoenix.HTML.Tag.content_tag(tag, {:safe, Diff.to_iodata(diff)}, attrs)
+    content_tag(tag, attrs, Diff.to_iodata(diff))
+  end
+
+  defp content_tag(tag, attrs, content) do
+    tag = to_string(tag)
+    {:safe, attrs} = Phoenix.HTML.attributes_escape(attrs)
+    {:safe, [?<, tag, attrs, ?>, content, ?<, ?/, tag, ?>]}
   end
 
   defp load_live!(view_or_component, kind) do

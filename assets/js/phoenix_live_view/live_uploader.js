@@ -51,6 +51,7 @@ export default class LiveUploader {
       entry.relative_path = file.webkitRelativePath
       entry.type = file.type
       entry.size = file.size
+      if(typeof(file.meta) === "function"){ entry.meta = file.meta() }
       fileData[uploadRef].push(entry)
     })
     return fileData
@@ -93,7 +94,11 @@ export default class LiveUploader {
   }
 
   static filesAwaitingPreflight(input){
-    return this.activeFiles(input).filter(f => !UploadEntry.isPreflighted(input, f))
+    return this.activeFiles(input).filter(f => !UploadEntry.isPreflighted(input, f) && !UploadEntry.isPreflightInProgress(f))
+  }
+
+  static markPreflightInProgress(entries){
+    entries.forEach(entry => UploadEntry.markPreflightInProgress(entry.file))
   }
 
   constructor(inputEl, view, onComplete){
@@ -102,6 +107,9 @@ export default class LiveUploader {
     this._entries =
       Array.from(LiveUploader.filesAwaitingPreflight(inputEl) || [])
         .map(file => new UploadEntry(inputEl, file, view))
+
+    // prevent sending duplicate preflight requests 
+    LiveUploader.markPreflightInProgress(this._entries)
 
     this.numEntriesInProgress = this._entries.length
   }
@@ -120,6 +128,7 @@ export default class LiveUploader {
       })
 
     let groupedEntries = this._entries.reduce((acc, entry) => {
+      if(!entry.meta){ return acc }
       let {name, callback} = entry.uploader(liveSocket.uploaders)
       acc[name] = acc[name] || {callback: callback, entries: []}
       acc[name].entries.push(entry)

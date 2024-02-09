@@ -17,7 +17,7 @@ callback, for example:
 |------------------------|------------|
 | [Params](#click-events) | `phx-value-*` |
 | [Click Events](#click-events) | `phx-click`, `phx-click-away` |
-| [Form Events](form-bindings.md) | `phx-change`, `phx-submit`, `phx-feedback-for`, `phx-disable-with`, `phx-trigger-action`, `phx-auto-recover` |
+| [Form Events](form-bindings.md) | `phx-change`, `phx-submit`, `phx-feedback-for`, `phx-feedback-group`, `phx-disable-with`, `phx-trigger-action`, `phx-auto-recover` |
 | [Focus Events](#focus-and-blur-events) | `phx-blur`, `phx-focus`, `phx-window-blur`, `phx-window-focus` |
 | [Key Events](#key-events) | `phx-keydown`, `phx-keyup`, `phx-window-keydown`, `phx-window-keyup`, `phx-key` |
 | [Scroll Events](#scroll-events-and-infinite-stream-pagination) | `phx-viewport-top`, `phx-viewport-bottom` |
@@ -127,6 +127,9 @@ available options can be found on
 [MDN](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values)
 or via the [Key Event Viewer](https://w3c.github.io/uievents/tools/key-event-viewer.html).
 
+*Note*: `phx-keyup` and `phx-keydown` are not supported on inputs.
+Instead use form bindings, such as `phx-change`, `phx-submit`, etc.
+
 *Note*: it is possible for certain browser features like autofill to trigger key events
 with no `"key"` field present in the value map sent to the server. For this reason, we
 recommend always having a fallback catch-all event handler for LiveView key bindings.
@@ -210,7 +213,7 @@ Our `paginate_posts` function fetches a page of posts, and determines if the use
   ]}
 >
   <li :for={{id, post} <- @streams.posts} id={id}>
-    <.post_card post={post}>
+    <.post_card post={post} />
   </li>
 </ul>
 <div :if={@end_of_timeline?} class="mt-5 text-[50px] text-center">
